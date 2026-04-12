@@ -41,5 +41,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: firmware-esp32c3
-          path: ./output/sketch.ino.bin
+          path: ./output/
           retention-days: 30
