@@ -39,13 +39,13 @@ Wiring
 nRF24L01+
 ESP32-C3 SuperMini
 
-SCK → GPIO 4  
-MISO → GPIO 5   
+SCK → GPIO 4    
+MISO → GPIO 5    
 MOSI → GPIO 6   
-CE → GPIO 20  
-CSN → GPIO 21
-VCC → 3.3V
-GND → GND
+CE → GPIO 20    
+CSN → GPIO 21   
+VCC → 3.3V  
+GND → GND  
 
 🚀 Getting Started
 First Flash (USB required)
