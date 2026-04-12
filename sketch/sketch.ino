@@ -1,15 +1,8 @@
 #include <WiFi.h>
+#include <WiFiManager.h>
 #include <ArduinoOTA.h>
 #include <SPI.h>
 #include <RF24.h>
-
-// WiFi credentials
-#ifndef WIFI_SSID
-#define WIFI_SSID "YOUR_WIFI_NAME"
-#endif
-#ifndef WIFI_PASS
-#define WIFI_PASS "YOUR_WIFI_PASSWORD"
-#endif
 
 #define SCK_PIN   4
 #define MISO_PIN  5
@@ -20,17 +13,18 @@
 SPIClass spi(FSPI);
 RF24 radio(CE_PIN, CSN_PIN);
 
-void setupOTA() {
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-
-  Serial.print("Connecting to WiFi");
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
+void setupWiFi() {
+  WiFiManager wm;
+  bool connected = wm.autoConnect("ESP32-C3-Setup");
+  if (!connected) {
+    Serial.println("WiFi failed, restarting...");
+    delay(3000);
+    ESP.restart();
   }
-  Serial.println("\nWiFi connected! IP: " + WiFi.localIP().toString());
+  Serial.println("WiFi connected! IP: " + WiFi.localIP().toString());
+}
 
+void setupOTA() {
   ArduinoOTA.setHostname("esp32c3-radio");
 
   ArduinoOTA.onStart([]() {
@@ -56,6 +50,7 @@ void setup() {
   Serial.begin(115200);
   delay(500);
 
+  setupWiFi();
   setupOTA();
 
   spi.begin(SCK_PIN, MISO_PIN, MOSI_PIN);
@@ -63,7 +58,6 @@ void setup() {
   Serial.println("Initializing nRF24L01+...");
   if (!radio.begin(&spi)) {
     Serial.println("nRF24L01+ initialization failed!");
-    // Keep OTA alive even if radio fails
     while (1) {
       ArduinoOTA.handle();
       delay(100);
@@ -84,7 +78,7 @@ void setup() {
 }
 
 void loop() {
-  ArduinoOTA.handle(); // обов'язково для роботи OTA
+  ArduinoOTA.handle();
 
   byte channel = random(0, 126);
   radio.setChannel(channel);
