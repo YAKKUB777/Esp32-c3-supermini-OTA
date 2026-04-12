@@ -32,12 +32,12 @@ jobs:
       - name: Install libraries
         run: |
           arduino-cli lib install "RF24"
+          arduino-cli lib install "WiFiManager"
 
       - name: Compile sketch
         run: |
           arduino-cli compile \
             --fqbn esp32:esp32:esp32c3 \
-            --build-property "build.extra_flags=-DWIFI_SSID=\"${{ secrets.WIFI_SSID }}\" -DWIFI_PASS=\"${{ secrets.WIFI_PASS }}\"" \
             --output-dir ./output \
             sketch/
 
@@ -45,9 +45,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: firmware-esp32c3
-          path: |
-            ./output/sketch.ino.bin
-            ./output/sketch.ino.bootloader.bin
-            ./output/sketch.ino.partitions.bin
+          path: ./output/sketch.ino.bin
           retention-days: 30
 
