@@ -13,20 +13,17 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install arduino-cli
-        run: |
-          curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | sh
-          echo "$HOME/bin" >> $GITHUB_PATH
+      - name: Setup arduino-cli
+        uses: arduino/setup-arduino-cli@v2
 
       - name: Configure arduino-cli
         run: |
           arduino-cli config init
           arduino-cli config set board_manager.additional_urls "https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json"
+          arduino-cli core update-index
 
       - name: Install ESP32 platform
-        run: |
-          arduino-cli core update-index
-          arduino-cli core install esp32:esp32
+        run: arduino-cli core install esp32:esp32
 
       - name: Install libraries
         run: |
@@ -46,4 +43,3 @@ jobs:
           name: firmware-esp32c3
           path: ./output/sketch.ino.bin
           retention-days: 30
-
