@@ -1,8 +1,5 @@
-#include <WiFi.h>
-#include <WiFiManager.h>
-#include <ArduinoOTA.h>
 #include <SPI.h>
-#include <RF24.h>
+#include "RF24.h"
 
 #define SCK_PIN   4
 #define MISO_PIN  5
@@ -13,75 +10,47 @@
 SPIClass spi(FSPI);
 RF24 radio(CE_PIN, CSN_PIN);
 
-void setupWiFi() {
-  WiFiManager wm;
-  bool connected = wm.autoConnect("ESP32-C3-Setup");
-  if (!connected) {
-    Serial.println("WiFi failed, restarting...");
-    delay(3000);
-    ESP.restart();
-  }
-  Serial.println("WiFi connected! IP: " + WiFi.localIP().toString());
-}
+// WiFi канали 1-13 (центральні частоти)
+const byte wifi_ch[] = {1, 6, 11, 2, 7, 12, 3, 8, 13, 4, 9, 5, 10};
+const byte wifi_count = 13;
 
-void setupOTA() {
-  ArduinoOTA.setHostname("esp32c3-radio");
+// BLE advertising канали
+const byte ble_ch[] = {37, 38, 39};
 
-  ArduinoOTA.onStart([]() {
-    Serial.println("OTA Update started...");
-    radio.stopConstCarrier();
-    radio.stopListening();
-  });
-  ArduinoOTA.onEnd([]() {
-    Serial.println("\nOTA Done! Rebooting...");
-  });
-  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-    Serial.printf("OTA Progress: %u%%\r", (progress / (total / 100)));
-  });
-  ArduinoOTA.onError([](ota_error_t error) {
-    Serial.printf("OTA Error[%u]\n", error);
-  });
-
-  ArduinoOTA.begin();
-  Serial.println("OTA ready!");
-}
+// Всі канали по порядку для загального sweep
+byte sweep_index = 0;
 
 void setup() {
-  Serial.begin(9600);
-  delay(3000);
-
-  setupWiFi();
-  setupOTA();
-
   spi.begin(SCK_PIN, MISO_PIN, MOSI_PIN);
 
-  Serial.println("Initializing nRF24L01+...");
-  if (!radio.begin(&spi)) {
-    Serial.println("nRF24L01+ initialization failed!");
-    while (1) {
-      ArduinoOTA.handle();
-      delay(100);
-    }
-  }
-  Serial.println("nRF24L01+ initialized!");
-
+  radio.begin(&spi);
   radio.setAutoAck(false);
+  radio.stopListening();
   radio.setRetries(0, 0);
+  radio.setPayloadSize(5);
+  radio.setAddressWidth(3);
   radio.setPALevel(RF24_PA_MAX, true);
   radio.setDataRate(RF24_2MBPS);
   radio.setCRCLength(RF24_CRC_DISABLED);
-  radio.setChannel(0);
-  radio.stopListening();
-  radio.startConstCarrier(RF24_PA_MAX, 45);
-
-  randomSeed(analogRead(0));
+  radio.startConstCarrier(RF24_PA_MAX, 40);
 }
 
 void loop() {
-  ArduinoOTA.handle();
+  // 1. Пройтись по WiFi каналах (найбільш вживані)
+  for (int i = 0; i < wifi_count; i++) {
+    radio.setChannel(wifi_ch[i]);
+    delayMicroseconds(150);
+  }
 
-  byte channel = random(0, 126);
-  radio.setChannel(channel);
-  delayMicroseconds(random(30, 100));
+  // 2. BLE advertising — по 3 рази кожен
+  for (int j = 0; j < 3; j++) {
+    radio.setChannel(ble_ch[0]); delayMicroseconds(300);
+    radio.setChannel(ble_ch[1]); delayMicroseconds(300);
+    radio.setChannel(ble_ch[2]); delayMicroseconds(300);
+  }
+
+  // 3. Загальний sweep решти каналів
+  radio.setChannel(sweep_index);
+  sweep_index = (sweep_index + 1) % 126;
+  delayMicroseconds(100);
 }
-
