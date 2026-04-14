@@ -1,4 +1,4 @@
-name: Build ESP32-C3 RF Tool
+name: Build ESP32-C3 Display Test
 
 on:
   push:
@@ -29,7 +29,6 @@ jobs:
         run: |
           arduino-cli lib install "Adafruit GFX Library"
           arduino-cli lib install "Adafruit ST7735 and ST7789 Library"
-          arduino-cli lib install "RadioLib"
 
       - name: Compile sketch
         run: |
@@ -41,6 +40,6 @@ jobs:
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
-          name: firmware-c3-rf-tool
+          name: display-test-c3
           path: ./output/
           retention-days: 30
