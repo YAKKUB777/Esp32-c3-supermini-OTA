@@ -7,7 +7,7 @@
 #include <SPI.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_ST7735.h>
-#include <SmartRC-CC1101-Driver-Lib.h>
+#include <SmartRC-CC1101-Driver-Lib2.h>
 #include <WiFi.h>
 #include <esp_wifi.h>
 
