@@ -131,13 +131,13 @@ void setup() {
   tft.setCursor(10, 30);
   tft.print("TFT OK!");
 
-  // Перезапуск SPI з MISO для CC1101
+  ##// Перезапуск SPI з MISO для CC1101
   SPI.end();
   delay(10);
   SPI.begin(TFT_SCLK, CC1101_MISO, TFT_MOSI);
   digitalWrite(CC1101_CS, HIGH);
 
-  // CC1101
+ ##// CC1101
   int state = cc1101.begin(freqs[freqIndex]);
   if (state == RADIOLIB_ERR_NONE) {
     cc1101.setOutputPower(12);
@@ -157,7 +157,7 @@ void setup() {
   esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
   esp_wifi_set_ps(WIFI_PS_NONE);
 
-  delay(1500);
+  delay(10);
   drawMainMenu();
 }
 
