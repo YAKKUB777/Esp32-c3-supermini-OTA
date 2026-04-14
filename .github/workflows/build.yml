@@ -1,4 +1,4 @@
-name: Build ESP32-C3 Jammer
+name: Build ESP32-C3 rf-tool
 
 on:
   push:
