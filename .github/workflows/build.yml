@@ -1,4 +1,4 @@
-name: Build ESP32-C3 rf-tool
+name: Build ESP32-C3 RF Tool
 
 on:
   push:
@@ -27,10 +27,9 @@ jobs:
 
       - name: Install libraries
         run: |
-          arduino-cli lib install "RF24"
           arduino-cli lib install "Adafruit GFX Library"
           arduino-cli lib install "Adafruit ST7735 and ST7789 Library"
-          arduino-cli lib install "SmartRC-CC1101-Driver-Lib2"
+          arduino-cli lib install "RadioLib"
 
       - name: Compile sketch
         run: |
@@ -42,6 +41,6 @@ jobs:
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
-          name: firmware-jammer-c3
+          name: firmware-c3-rf-tool
           path: ./output/
           retention-days: 30
