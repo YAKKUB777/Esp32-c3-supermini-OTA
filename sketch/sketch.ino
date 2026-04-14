@@ -1,13 +1,13 @@
 /*
- * RF TOOL v2.0 for ESP32-C3 Supermini
- * Features: Wi-Fi Deauther, Sub-GHz Scanner & Jammer (SmartRC-CC1101)
+ * RF TOOL v3.0 for ESP32-C3 Supermini
+ * Features: Wi-Fi Deauther, Sub-GHz Scanner & Jammer (RadioLib)
  * Display: ST7735 0.96" (80x160)
  */
 
 #include <SPI.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_ST7735.h>
-#include <SmartRC-CC1101-Driver-Lib2.h>
+#include <RadioLib.h>
 #include <WiFi.h>
 #include <esp_wifi.h>
 
@@ -19,13 +19,14 @@
 #define TFT_SCLK    8
 #define TFT_BL      9
 
+#define CC1101_CS   4
 #define BTN_UP      1
 #define BTN_DOWN    2
 #define BTN_SEL     3
 #define BTN_BACK    0   // BOOT кнопка
 
 Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_RST);
-CC1101 cc1101;
+CC1101 cc1101 = new Module(CC1101_CS, 255, 255, 255);
 
 // ====================== Стани меню ======================
 enum MenuState {
@@ -40,7 +41,7 @@ int menuIndex = 0;
 int subIndex = 0;
 bool isRunning = false;
 
-// Для CC1101
+// Для CC1101 (RadioLib)
 float freqs[] = {315.0, 433.92, 868.0, 915.0};
 int freqIndex = 1;  // 433.92 за замовчуванням
 
@@ -88,12 +89,16 @@ void setup() {
   tft.setRotation(1);
   tft.fillScreen(ST77XX_BLACK);
   
-  // CC1101
-  SPI.begin(8, 11, 10, 4);  // SCK, MISO, MOSI, CS
-  cc1101.begin();
-  cc1101.setMHZ(freqs[freqIndex]);
-  cc1101.setTxPower(12);  // максимальна потужність
-  cc1101.setRx();
+  // CC1101 (RadioLib)
+  SPI.begin(8, 11, 10, CC1101_CS);
+  int state = cc1101.begin(freqs[freqIndex]);
+  if (state == RADIOLIB_ERR_NONE) {
+    Serial.println("CC1101 OK");
+    cc1101.setOutputPower(12);  // максимальна потужність
+  } else {
+    Serial.print("CC1101 failed, code: ");
+    Serial.println(state);
+  }
   
   // Wi-Fi (для деаутера)
   WiFi.mode(WIFI_STA);
@@ -110,26 +115,25 @@ void setup() {
 void loop() {
   checkButtons();
   
-  // Сканування Sub-GHz
+  // Сканування Sub-GHz (RadioLib)
   if (currentState == SUBGHZ_SCAN && isRunning) {
     static unsigned long lastScan = 0;
     if (millis() - lastScan > 200) {
       lastScan = millis();
-      int rssi = cc1101.getRssi();
+      float rssi = cc1101.getRSSI();
       tft.fillRect(0, 50, 80, 30, ST77XX_BLACK);
       tft.setCursor(5, 55);
       tft.print("RSSI: ");
-      tft.print(rssi);
+      tft.print((int)rssi);
       tft.print(" dBm");
     }
   }
   
-  // Джеммінг Sub-GHz
+  // Джеммінг Sub-GHz (RadioLib)
   if (currentState == SUBGHZ_JAM && isRunning) {
-    cc1101.setTx(true);
+    cc1101.transmitDirect();
   } else if (currentState == SUBGHZ_JAM && !isRunning) {
-    cc1101.setTx(false);
-    cc1101.setRx();
+    cc1101.standby();
   }
   
   delay(20);
@@ -141,7 +145,7 @@ void drawMainMenu() {
   tft.setTextSize(1);
   tft.setTextColor(ST77XX_GREEN);
   tft.setCursor(10, 5);
-  tft.println("RF TOOL v2.0");
+  tft.println("RF TOOL v3.0");
   tft.drawLine(0, 15, 80, 15, ST77XX_WHITE);
   
   const char* items[] = {"Wi-Fi Tools", "Sub-GHz Scan", "Sub-GHz Jam", "Settings"};
@@ -256,11 +260,11 @@ void checkButtons() {
       drawWiFiMenu();
     } else if (currentState == SUBGHZ_SCAN && !isRunning) {
       freqIndex = (freqIndex + 3) % 4;
-      cc1101.setMHZ(freqs[freqIndex]);
+      cc1101.setFrequency(freqs[freqIndex]);
       drawSubGHzScan();
     } else if (currentState == SUBGHZ_JAM && !isRunning) {
       freqIndex = (freqIndex + 3) % 4;
-      cc1101.setMHZ(freqs[freqIndex]);
+      cc1101.setFrequency(freqs[freqIndex]);
       drawSubGHzJam();
     } else if (currentState == SETTINGS) {
       brightness = constrain(brightness - 25, 0, 255);
@@ -280,11 +284,11 @@ void checkButtons() {
       drawWiFiMenu();
     } else if (currentState == SUBGHZ_SCAN && !isRunning) {
       freqIndex = (freqIndex + 1) % 4;
-      cc1101.setMHZ(freqs[freqIndex]);
+      cc1101.setFrequency(freqs[freqIndex]);
       drawSubGHzScan();
     } else if (currentState == SUBGHZ_JAM && !isRunning) {
       freqIndex = (freqIndex + 1) % 4;
-      cc1101.setMHZ(freqs[freqIndex]);
+      cc1101.setFrequency(freqs[freqIndex]);
       drawSubGHzJam();
     } else if (currentState == SETTINGS) {
       brightness = constrain(brightness + 25, 0, 255);
@@ -319,9 +323,6 @@ void checkButtons() {
     }
     else if (currentState == SUBGHZ_SCAN) {
       isRunning = !isRunning;
-      if (isRunning) {
-        cc1101.setRx();
-      }
       drawSubGHzScan();
     }
     else if (currentState == SUBGHZ_JAM) {
@@ -335,7 +336,7 @@ void checkButtons() {
     if (currentState != MAIN_MENU) {
       currentState = MAIN_MENU;
       isRunning = false;
-      cc1101.setRx();
+      cc1101.standby();
       drawMainMenu();
     } else if (settingsChanged) {
       saveSettings();
