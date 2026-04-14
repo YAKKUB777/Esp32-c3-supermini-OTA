@@ -26,11 +26,11 @@ jobs:
         run: arduino-cli core install esp32:esp32
 
       - name: Install libraries
-        run:
-    arduino-cli lib install "RF24"
-    arduino-cli lib install "Adafruit GFX Library"
-    arduino-cli lib install "Adafruit ST7735 and ST7789 Library"
-    arduino-cli lib install "ELECHOUSE_CC1101"
+        run: |
+          arduino-cli lib install "RF24"
+          arduino-cli lib install "Adafruit GFX Library"
+          arduino-cli lib install "Adafruit ST7735 and ST7789 Library"
+          arduino-cli lib install "ELECHOUSE_CC1101"
 
       - name: Compile sketch
         run: |
