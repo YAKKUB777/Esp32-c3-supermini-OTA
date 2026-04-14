@@ -10,6 +10,9 @@
 #include <RadioLib.h>
 #include <WiFi.h>
 #include <esp_wifi.h>
+#include <Preferences.h>
+
+Preferences prefs;
 
 // ====================== Піни для ESP32-C3 Supermini ======================
 #define TFT_CS      5
@@ -81,6 +84,9 @@ void setup() {
   
   // Підсвітка
   pinMode(TFT_BL, OUTPUT);
+  
+  // Завантаження налаштувань (до ініціалізації дисплея)
+  loadSettings();
   analogWrite(TFT_BL, brightness);
   
   // Дисплей
@@ -104,9 +110,6 @@ void setup() {
   WiFi.mode(WIFI_STA);
   esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B|WIFI_PROTOCOL_11G|WIFI_PROTOCOL_11N);
   esp_wifi_set_ps(WIFI_PS_NONE);
-  
-  // Завантаження налаштувань
-  loadSettings();
   
   drawMainMenu();
 }
@@ -395,20 +398,22 @@ void startDeauth(uint8_t* bssid, int channel) {
   drawWiFiMenu();
 }
 
-// ====================== EEPROM ======================
+// ====================== Збереження налаштувань (Preferences) ======================
 void saveSettings() {
-  EEPROM.begin(64);
-  EEPROM.write(0, brightness);
-  EEPROM.write(1, freqIndex);
-  EEPROM.commit();
-  EEPROM.end();
+  prefs.begin("rf-tool", false);
+  prefs.putUChar("bright", brightness);
+  prefs.putUChar("freq", freqIndex);
+  prefs.end();
+  Serial.println("Settings saved to flash");
 }
 
 void loadSettings() {
-  EEPROM.begin(64);
-  brightness = EEPROM.read(0);
-  if (brightness < 10 || brightness > 250) brightness = 150;
-  freqIndex = EEPROM.read(1);
-  if (freqIndex > 3) freqIndex = 1;
-  EEPROM.end();
+  prefs.begin("rf-tool", true);
+  brightness = prefs.getUChar("bright", 150);
+  freqIndex = prefs.getUChar("freq", 1);
+  prefs.end();
+  Serial.print("Settings loaded: brightness=");
+  Serial.print(brightness);
+  Serial.print(", freq=");
+  Serial.println(freqIndex);
 }
