@@ -1,4 +1,4 @@
-name: Build ESP32-C3 RF Tool
+name: Build ESP32-C3 Gamepad
 
 on:
   push:
@@ -27,19 +27,20 @@ jobs:
 
       - name: Install libraries
         run: |
-          arduino-cli lib install "Adafruit GFX Library"
-          arduino-cli lib install "Adafruit ST7735 and ST7789 Library"
+          arduino-cli lib install "BleGamepad"
+          arduino-cli lib install "ESP32AnalogRead"
 
       - name: Compile sketch
         run: |
           arduino-cli compile \
             --fqbn esp32:esp32:esp32c3 \
+            --build-property build.partitions=default_4MB.csv \
             --output-dir ./output \
             sketch/
 
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
-          name: firmware-c3-rf-tool
+          name: firmware-esp32c3-gamepad
           path: ./output/
           retention-days: 30
