@@ -1,16 +1,12 @@
 #include "USB.h"
-#include "USBHIDGamepad.h"
-
-USBHIDGamepad Gamepad;
+#include "USBHID.h"
 
 // ====================== Піни ======================
-// Аналогові (ADC)
 #define JOY1_X    1
 #define JOY1_Y    2
 #define JOY2_X    3
 #define JOY2_Y    4
 
-// Цифрові (кнопки)
 #define JOY1_SW   5
 #define JOY2_SW   6
 #define BTN_A     7
@@ -29,21 +25,45 @@ int joy2X_center, joy2Y_center;
 
 bool calibrated = false;
 
-// Фільтрація (медіанний фільтр)
-const int FILTER_SIZE = 5;
-int joy1X_buf[FILTER_SIZE], joy1Y_buf[FILTER_SIZE];
-int joy2X_buf[FILTER_SIZE], joy2Y_buf[FILTER_SIZE];
-int bufIndex = 0;
-
-// ====================== Прототипи ======================
-void calibrate();
-int medianFilter(int* buffer, int newValue);
-int mapToAxis(int value, int minVal, int maxVal, int center, int deadZone);
+// ====================== USB HID ======================
+USBHID HID;
+static const uint8_t reportDescriptor[] = {
+  0x05, 0x01, // Usage Page (Generic Desktop)
+  0x09, 0x05, // Usage (Game Pad)
+  0xA1, 0x01, // Collection (Application)
+  0x85, 0x01, //   Report ID (1)
+  // Лівий джойстик (X, Y)
+  0x09, 0x30, //   Usage (X)
+  0x09, 0x31, //   Usage (Y)
+  0x15, 0x81, //   Logical Minimum (-127)
+  0x25, 0x7F, //   Logical Maximum (127)
+  0x75, 0x08, //   Report Size (8)
+  0x95, 0x02, //   Report Count (2)
+  0x81, 0x02, //   Input (Data, Var, Abs)
+  // Правий джойстик (Z, Rz)
+  0x09, 0x32, //   Usage (Z)
+  0x09, 0x35, //   Usage (Rz)
+  0x15, 0x81, //   Logical Minimum (-127)
+  0x25, 0x7F, //   Logical Maximum (127)
+  0x75, 0x08, //   Report Size (8)
+  0x95, 0x02, //   Report Count (2)
+  0x81, 0x02, //   Input (Data, Var, Abs)
+  // Кнопки (8 штук)
+  0x05, 0x09, //   Usage Page (Button)
+  0x19, 0x01, //   Usage Minimum (1)
+  0x29, 0x08, //   Usage Maximum (8)
+  0x15, 0x00, //   Logical Minimum (0)
+  0x25, 0x01, //   Logical Maximum (1)
+  0x75, 0x01, //   Report Size (1)
+  0x95, 0x08, //   Report Count (8)
+  0x81, 0x02, //   Input (Data, Var, Abs)
+  0xC0        // End Collection
+};
 
 void setup() {
   Serial.begin(115200);
   
-  // Налаштування кнопок
+  // Кнопки
   pinMode(JOY1_SW, INPUT_PULLUP);
   pinMode(JOY2_SW, INPUT_PULLUP);
   pinMode(BTN_A, INPUT_PULLUP);
@@ -53,14 +73,14 @@ void setup() {
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, HIGH);
   
-  // Налаштування АЦП
   analogReadResolution(12);
   
   // Калібрування
   calibrate();
   
-  // Запуск USB HID геймпада
-  Gamepad.begin();
+  // USB HID
+  HID.begin();
+  HID.addDevice(reportDescriptor, sizeof(reportDescriptor));
   USB.begin();
   
   Serial.println("USB Gamepad ready");
@@ -69,16 +89,11 @@ void setup() {
 void loop() {
   if (!calibrated) return;
   
-  // Читання з фільтрацією
-  int rawX1 = analogRead(JOY1_X);
-  int rawY1 = analogRead(JOY1_Y);
-  int rawX2 = analogRead(JOY2_X);
-  int rawY2 = analogRead(JOY2_Y);
-  
-  int x1 = medianFilter(joy1X_buf, rawX1);
-  int y1 = medianFilter(joy1Y_buf, rawY1);
-  int x2 = medianFilter(joy2X_buf, rawX2);
-  int y2 = medianFilter(joy2Y_buf, rawY2);
+  // Читання аналогових значень
+  int x1 = analogRead(JOY1_X);
+  int y1 = analogRead(JOY1_Y);
+  int x2 = analogRead(JOY2_X);
+  int y2 = analogRead(JOY2_Y);
   
   int deadZone = (joy1X_max - joy1X_min) / 20;
   
@@ -87,8 +102,8 @@ void loop() {
   int jx2 = mapToAxis(x2, joy2X_min, joy2X_max, joy2X_center, deadZone);
   int jy2 = mapToAxis(y2, joy2Y_min, joy2Y_max, joy2Y_center, deadZone);
   
-  // Читання кнопок
-  uint16_t buttons = 0;
+  // Кнопки
+  uint8_t buttons = 0;
   if (digitalRead(JOY1_SW) == LOW) buttons |= 0x01;
   if (digitalRead(JOY2_SW) == LOW) buttons |= 0x02;
   if (digitalRead(BTN_A) == LOW)   buttons |= 0x04;
@@ -96,17 +111,25 @@ void loop() {
   if (digitalRead(BTN_X) == LOW)   buttons |= 0x10;
   if (digitalRead(BTN_Y) == LOW)   buttons |= 0x20;
   
-  // Надсилання даних через USB
-  Gamepad.leftStick(jx1, jy1);
-  Gamepad.rightStick(jx2, jy2);
-  Gamepad.press(buttons);
-  Gamepad.write();
+  // Формуємо звіт
+  uint8_t report[8];
+  report[0] = (uint8_t)(jx1 + 128);
+  report[1] = (uint8_t)(jy1 + 128);
+  report[2] = (uint8_t)(jx2 + 128);
+  report[3] = (uint8_t)(jy2 + 128);
+  report[4] = buttons;
+  report[5] = 0;
+  report[6] = 0;
+  report[7] = 0;
   
-  delay(2); // ~500 Гц оновлення
+  // Надсилання через USB HID
+  HID.sendReport(1, report, 8);
+  
+  delay(2);
 }
 
 void calibrate() {
-  Serial.println("Calibrating... Please move joysticks to edges");
+  Serial.println("Calibrating...");
   digitalWrite(LED_PIN, LOW);
   
   for (int i = 0; i < 500; i++) {
@@ -136,29 +159,6 @@ void calibrate() {
   digitalWrite(LED_PIN, HIGH);
   
   Serial.println("Calibration done!");
-  Serial.print("Joy1 X: min="); Serial.print(joy1X_min); Serial.print(" max="); Serial.print(joy1X_max); Serial.print(" center="); Serial.println(joy1X_center);
-  Serial.print("Joy1 Y: min="); Serial.print(joy1Y_min); Serial.print(" max="); Serial.print(joy1Y_max); Serial.print(" center="); Serial.println(joy1Y_center);
-  Serial.print("Joy2 X: min="); Serial.print(joy2X_min); Serial.print(" max="); Serial.print(joy2X_max); Serial.print(" center="); Serial.println(joy2X_center);
-  Serial.print("Joy2 Y: min="); Serial.print(joy2Y_min); Serial.print(" max="); Serial.print(joy2Y_max); Serial.print(" center="); Serial.println(joy2Y_center);
-}
-
-int medianFilter(int* buffer, int newValue) {
-  static int values[FILTER_SIZE];
-  values[bufIndex] = newValue;
-  bufIndex = (bufIndex + 1) % FILTER_SIZE;
-  
-  int sorted[FILTER_SIZE];
-  memcpy(sorted, values, sizeof(values));
-  for (int i = 0; i < FILTER_SIZE - 1; i++) {
-    for (int j = i + 1; j < FILTER_SIZE; j++) {
-      if (sorted[i] > sorted[j]) {
-        int temp = sorted[i];
-        sorted[i] = sorted[j];
-        sorted[j] = temp;
-      }
-    }
-  }
-  return sorted[FILTER_SIZE / 2];
 }
 
 int mapToAxis(int value, int minVal, int maxVal, int center, int deadZone) {
