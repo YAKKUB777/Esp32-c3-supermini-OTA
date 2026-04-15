@@ -26,14 +26,16 @@ jobs:
         run: arduino-cli core install esp32:esp32
 
       - name: Install NimBLE library
-        run: arduino-cli lib install "NimBLE"
+        run: |
+          arduino-cli lib install "NimBLE"
 
       - name: Install ESP32-BLE-Gamepad from GitHub
         run: |
           cd /tmp
           git clone https://github.com/lemmingDev/ESP32-BLE-Gamepad.git
           mkdir -p /home/runner/Arduino/libraries
-          cp -r ESP32-BLE-Gamepad /home/runner/Arduino/libraries/BleGamepad
+          cp -r /tmp/ESP32-BLE-Gamepad /home/runner/Arduino/libraries/BleGamepad
+          ls -la /home/runner/Arduino/libraries/BleGamepad
 
       - name: Compile sketch
         run: |
