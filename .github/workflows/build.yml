@@ -28,11 +28,17 @@ jobs:
       - name: Install ESP32AnalogRead library
         run: arduino-cli lib install "ESP32AnalogRead"
 
+      - name: Install NimBLE library
+        run: |
+          cd /tmp
+          git clone https://github.com/h2zero/NimBLE-Arduino.git
+          mkdir -p /home/runner/Arduino/libraries
+          cp -r NimBLE-Arduino /home/runner/Arduino/libraries/NimBLE
+
       - name: Install BleGamepad from GitHub
         run: |
           cd /tmp
           git clone https://github.com/lemmingDev/ESP32-BLE-Gamepad.git
-          mkdir -p /home/runner/Arduino/libraries
           cp -r ESP32-BLE-Gamepad /home/runner/Arduino/libraries/BleGamepad
 
       - name: Compile sketch
