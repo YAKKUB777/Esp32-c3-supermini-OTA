@@ -39,7 +39,6 @@ jobs:
         run: |
           arduino-cli compile \
             --fqbn esp32:esp32:esp32c3 \
-            --build-property build.partitions=default_4MB.csv \
             --output-dir ./output \
             sketch/
 
