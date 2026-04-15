@@ -15,18 +15,7 @@
 #define BTN_Y     10
 #define LED_PIN   20
 
-// ====================== Змінні калібрування ======================
-int joy1X_min = 4095, joy1X_max = 0;
-int joy1Y_min = 4095, joy1Y_max = 0;
-int joy2X_min = 4095, joy2X_max = 0;
-int joy2Y_min = 4095, joy2Y_max = 0;
-int joy1X_center, joy1Y_center;
-int joy2X_center, joy2Y_center;
-
-bool calibrated = false;
-
 // ====================== USB HID ======================
-USBHID HID;
 static const uint8_t reportDescriptor[] = {
   0x05, 0x01, // Usage Page (Generic Desktop)
   0x09, 0x05, // Usage (Game Pad)
@@ -59,6 +48,22 @@ static const uint8_t reportDescriptor[] = {
   0x81, 0x02, //   Input (Data, Var, Abs)
   0xC0        // End Collection
 };
+
+USBHID HID;
+bool connected = false;
+
+// ====================== Змінні калібрування ======================
+int joy1X_min = 4095, joy1X_max = 0;
+int joy1Y_min = 4095, joy1Y_max = 0;
+int joy2X_min = 4095, joy2X_max = 0;
+int joy2Y_min = 4095, joy2Y_max = 0;
+int joy1X_center, joy1Y_center;
+int joy2X_center, joy2Y_center;
+bool calibrated = false;
+
+// ====================== Функції ======================
+void calibrate();
+int mapToAxis(int value, int minVal, int maxVal, int center, int deadZone);
 
 void setup() {
   Serial.begin(115200);
