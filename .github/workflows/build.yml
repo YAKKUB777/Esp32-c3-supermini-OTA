@@ -1,4 +1,4 @@
-name: Build ESP32-C3 Gamepad
+name: Build ESP32-C3 USB Gamepad
 
 on:
   push:
@@ -25,22 +25,6 @@ jobs:
       - name: Install ESP32 platform
         run: arduino-cli core install esp32:esp32
 
-      - name: Install ESP32AnalogRead library
-        run: arduino-cli lib install "ESP32AnalogRead"
-
-      - name: Install NimBLE library
-        run: |
-          cd /tmp
-          git clone https://github.com/h2zero/NimBLE-Arduino.git
-          mkdir -p /home/runner/Arduino/libraries
-          cp -r NimBLE-Arduino /home/runner/Arduino/libraries/NimBLE
-
-      - name: Install BleGamepad from GitHub
-        run: |
-          cd /tmp
-          git clone https://github.com/lemmingDev/ESP32-BLE-Gamepad.git
-          cp -r ESP32-BLE-Gamepad /home/runner/Arduino/libraries/BleGamepad
-
       - name: Compile sketch
         run: |
           arduino-cli compile \
@@ -51,6 +35,6 @@ jobs:
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
-          name: firmware-esp32c3-gamepad
+          name: firmware-esp32c3-usb-gamepad
           path: ./output/
           retention-days: 30
