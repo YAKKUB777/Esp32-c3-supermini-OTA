@@ -9,32 +9,34 @@
 RF24 radio(CE_PIN, CSN_PIN);
 
 void setup() {
-  // Налаштування SPI для Ci24R1 (3-wire mode)
-  // Нагадування: з'єднайте MOSI (5) та MISO (6) через резистор 1к до DATA модуля
-  radio.begin();
+  // Ініціалізація радіо
+  if (!radio.begin()) {
+    return;
+  }
   
-  [span_0](start_span)[span_1](start_span)// Максимальна потужність 11dBm згідно з мануалом[span_0](end_span)[span_1](end_span)
-  radio.setPALevel(RF24_PA_MAX); 
-  radio.setDataRate(RF24_2MBPS);
-  radio.setAutoAck(false);
+  // Налаштування для модуля E01C-2G4M11S (Ci24R1)
+  radio.setPALevel(RF24_PA_MAX); // Максимальна потужність 11dBm
+  radio.setDataRate(RF24_2MBPS); // Ширша смуга завад
+  radio.setAutoAck(false);       // Вимикаємо підтвердження
   radio.setRetries(0, 0);
   radio.stopListening();
 
   // Прямий запис у регістр для активації постійного випромінювання (CONT_WAVE)
-  uint8_t setup_reg = radio.read_register(RF_SETUP);
-  radio.write_register(RF_SETUP, setup_reg | 0x80); 
+  // Використовуємо явне вказання простору імен для запобігання помилок scope
+  uint8_t setup_reg = radio.read_register(0x06); // 0x06 - це RF_SETUP
+  radio.write_register(0x06, setup_reg | 0x80); 
 }
 
 void loop() {
-  [span_2](start_span)// Цикл швидкого "прошивання" частот від 2.400 до 2.525 ГГц[span_2](end_span)
+  // Цикл швидкого проходження частот для створення "стіни шуму"
   for (int i = 0; i < 126; i++) {
     radio.setChannel(i);
     
-    // Відправка порожнього пакету для модуляції шуму
+    // Відправка порожнього пакета
     const uint8_t jam_data[] = {0xFF, 0xFF, 0xFF, 0xFF};
     radio.startWrite(&jam_data, sizeof(jam_data), true);
     
-    // Дуже коротка затримка для охоплення всього спектру
+    // Мінімальна пауза для стабілізації частоти
     delayMicroseconds(50); 
   }
 }
