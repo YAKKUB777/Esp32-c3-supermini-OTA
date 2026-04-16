@@ -2,11 +2,7 @@
 
 ## ⚠️ WORK IN PROGRESS – not final
 
-## Currently implemented:
-- Wi-Fi Deauther
-- Sub-GHz Scanner + Jammer
-
-2.4 GHz jammer (as previously planned) – **under development**.
+**- 2.4 GHz jammer**
 
 Sketch is being tested. Pinout and features may change.
 
