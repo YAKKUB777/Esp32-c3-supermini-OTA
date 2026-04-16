@@ -8,7 +8,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4 # Також оновив до v4 для стабільності
 
       - name: Install Arduino CLI
         uses: arduino/setup-arduino-cli@v1
@@ -24,10 +24,14 @@ jobs:
 
       - name: Compile Sketch
         run: |
+          # Створюємо папку для білду
+          mkdir -p build
+          # Компілюємо. Вказуємо шлях до іно-файлу згідно з твоєю структурою
           arduino-cli compile --fqbn esp32:esp32:esp32c3 --output-dir ./build ./sketch/sketch.ino
 
       - name: Upload Binary Artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4 # ОНОВЛЕНО ДО V4
         with:
-          name: esp32c3-jammer-firmware
+          name: esp32c3-jammer-firmware-${{ github.run_id }} # Додав ID для унікальності
           path: ./build/*.bin
+          if-no-files-found: error
