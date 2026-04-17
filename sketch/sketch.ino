@@ -1,42 +1,56 @@
+#include <Arduino.h>
 #include <SPI.h>
+#include <nRF24L01.h>
 #include <RF24.h>
 
 // Піни для ESP32-C3 SuperMini
-#define CE_PIN   8
-#define CSN_PIN  7
+#define SCK_PIN   4
+#define MISO_PIN  5
+#define MOSI_PIN  6
+#define CE_PIN    20
+#define CSN_PIN   21
 
+SPIClass spi(FSPI);  
 RF24 radio(CE_PIN, CSN_PIN);
 
 void setup() {
-  // Ініціалізація радіо
-  if (!radio.begin()) {
-    return;
-  }
-  
-  // Базові налаштування потужності та швидкості
-  radio.setPALevel(RF24_PA_MAX); // Максимальна потужність (11dBm для E01C)
-  radio.setDataRate(RF24_2MBPS); 
-  radio.setAutoAck(false);       
-  radio.setRetries(0, 0);
-  radio.stopListening();
+  Serial.begin(115200);
+  delay(500);  
 
-  // Активація режиму постійної несучої через стандартну функцію бібліотеки.
-  // Це безпечно змінить біт CONT_WAVE у регістрі 0x06 (RF_SETUP).
-  // Параметри: рівень потужності та канал (для ініціалізації)
-  radio.startConstCarrier(RF24_PA_MAX, 0);
+  // Ініціалізація апаратної шини SPI
+  spi.begin(SCK_PIN, MISO_PIN, MOSI_PIN);
+
+  Serial.println("Initializing nRF24L01+ PA+LNA...");
+
+  if (!radio.begin(&spi)) {
+    Serial.println("nRF24L01+ initialization failed!");
+    while (1);
+  }
+
+  // Налаштування агресивного джаммінгу
+  radio.setAutoAck(false);
+  radio.setRetries(0, 0);
+  radio.setPALevel(RF24_PA_MAX, true);
+  radio.setDataRate(RF24_2MBPS);  
+  radio.setCRCLength(RF24_CRC_DISABLED);  
+  radio.stopListening();
+  
+  // Початкова активація носія
+  radio.startConstCarrier(RF24_PA_MAX, 45);  
+
+  Serial.println("System Ready. Start Random Hopping.");
 }
 
 void loop() {
-  // Цикл швидкого проходження частот (Frequency Hopping Jammer)
-  // Ми використовуємо setChannel всередині циклу для "прошивання" ефіру
-  for (int i = 0; i < 126; i++) {
-    radio.setChannel(i);
-    
-    // В режимі ConstCarrier зміна каналу автоматично переносить несучу.
-    // Відправка пакету додає додаткову модуляцію шуму.
-    const uint8_t jam_data[] = {0xFF, 0xFF, 0xFF, 0xFF};
-    radio.startWrite(&jam_data, sizeof(jam_data), true);
-    
-    delayMicroseconds(50); 
-  }
+  // Справжній рандом на базі апаратного RNG ESP32
+  uint8_t channel = esp_random() % 126;
+  
+  radio.setChannel(channel);
+  
+  // В деяких версіях бібліотеки зміна каналу скидає ConstCarrier, 
+  // тому іноді корисно викликати його повторно:
+  radio.startConstCarrier(RF24_PA_MAX, channel);
+
+  // Рандомна затримка для непередбачуваності
+  delayMicroseconds(random(30, 100));  
 }
