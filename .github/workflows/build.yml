@@ -1,37 +1,47 @@
-name: Build ESP32-C3 Random Jammer
+name: Build ESP32-C3 NFC Emulator
 
-on: [push, pull_request]
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Arduino CLI
-        uses: arduino/setup-arduino-cli@v1
+      - name: Setup arduino-cli
+        uses: arduino/setup-arduino-cli@v2
 
-      - name: Install ESP32 Platform
+      - name: Configure arduino-cli
         run: |
-          arduino-cli core update-index --additional-urls https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
-          arduino-cli core install esp32:esp32 --additional-urls https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+          arduino-cli config init
+          arduino-cli config set board_manager.additional_urls "https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json"
+          arduino-cli core update-index
 
-      - name: Install Libraries
+      - name: Install ESP32 platform
+        run: arduino-cli core install esp32:esp32@3.0.0
+
+      - name: Install libraries
         run: |
-          # Встановлюємо офіційну бібліотеку RF24
-          arduino-cli lib install "RF24"
+          arduino-cli lib install "Adafruit GFX Library"
+          arduino-cli lib install "Adafruit ST7735 and ST7789 Library"
+          arduino-cli lib install "Adafruit BusIO"
 
-      - name: Compile Sketch
+      - name: Compile sketch
         run: |
-          mkdir -p build
-          # Компіляція під ESP32-C3. Шлях до файлу: sketch/sketch.ino
-          arduino-cli compile --fqbn esp32:esp32:esp32c3 --output-dir ./build ./sketch/sketch.ino
+          arduino-cli compile \
+            --fqbn esp32:esp32:esp32c3 \
+            --build-property build.usb_mode=1 \
+            --output-dir ./output \
+            sketch/
 
-      - name: Upload Binary Artifact
+      - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
-          name: esp32c3-jammer-firmware
-          path: ./build/*.bin
-          if-no-files-found: error
+          name: firmware-esp32c3-nfc-emulator
+          path: ./output/
+          retention-days: 30
