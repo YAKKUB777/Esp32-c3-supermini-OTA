@@ -33,8 +33,10 @@ jobs:
 
       - name: Install PN532 library from GitHub
         run: |
-          mkdir -p ~/Arduino/libraries
-          git clone https://github.com/elechouse/PN532.git ~/Arduino/libraries/PN532
+          mkdir -p ~/Arduino/libraries/PN532
+          git clone https://github.com/elechouse/PN532.git /tmp/pn532_repo
+          cp -r /tmp/pn532_repo/PN532/. ~/Arduino/libraries/PN532/
+          cp -r /tmp/pn532_repo/PN532_I2C ~/Arduino/libraries/PN532_I2C
 
       - name: Compile sketch
         run: |
