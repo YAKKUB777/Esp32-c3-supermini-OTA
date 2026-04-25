@@ -1,8 +1,6 @@
-# ESP32-C3 RF Tool
+# ESP32-C3 
 
 ## ⚠️ WORK IN PROGRESS – not final
-
-**- 2.4 GHz jammer**
 
 Sketch is being tested. Pinout and features may change.
 
