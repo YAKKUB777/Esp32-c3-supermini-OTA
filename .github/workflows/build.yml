@@ -22,33 +22,31 @@ jobs:
           arduino-cli config set board_manager.additional_urls "https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json"
           arduino-cli core update-index
 
-      - name: Install ESP32 platform (stable 2.0.17)
-        run: arduino-cli core install esp32:esp32@2.0.17
+      - name: Install ESP32 platform
+        run: arduino-cli core install esp32:esp32
 
-      - name: Install libraries from registry
+      - name: Install libraries from Library Manager
         run: |
           arduino-cli lib install "Adafruit GFX Library"
           arduino-cli lib install "Adafruit ST7735 and ST7789 Library"
           arduino-cli lib install "Adafruit BusIO"
 
-      - name: Install Elechouse PN532 from GitHub
+      - name: Install PN532 library from GitHub
         run: |
-          cd /tmp
-          git clone https://github.com/elechouse/PN532.git
-          mkdir -p /home/runner/Arduino/libraries
-          cp -r PN532 /home/runner/Arduino/libraries/PN532
-          ls -la /home/runner/Arduino/libraries/PN532
+          mkdir -p ~/Arduino/libraries
+          git clone https://github.com/elechouse/PN532.git ~/Arduino/libraries/PN532
 
       - name: Compile sketch
         run: |
           arduino-cli compile \
             --fqbn esp32:esp32:esp32c3 \
+            --libraries ~/Arduino/libraries \
             --output-dir ./output \
             sketch/
 
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
-          name: firmware-esp32c3-nfc-emulator
+          name: firmware-nfc-emulator
           path: ./output/
           retention-days: 30
