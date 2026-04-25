@@ -166,7 +166,6 @@ void scanUID() {
 
   drawMenu();
 }
-
 void emulateUID() {
   if (!hasUID) {
     tft.fillScreen(C_BG);
@@ -192,15 +191,16 @@ void emulateUID() {
 
   uint8_t params[32];
   uint8_t p = 0;
-  params[p++] = 0x00;
-  params[p++] = 0x04;
-  params[p++] = 0x00;
+  params[p++] = 0x00; // ATQA byte 1
+  params[p++] = 0x04; // ATQA byte 2
+  params[p++] = 0x08; // SAK — Mifare Classic 1K
   memcpy(&params[p], savedUID, savedUIDLen);
   p += savedUIDLen;
 
   unsigned long startTime = millis();
 
   while (millis() - startTime < EMULATE_TIME) {
+    // Оновлюємо таймер
     uint32_t remaining = (EMULATE_TIME - (millis() - startTime)) / 1000;
     tft.fillRect(2, 60, 80, 10, C_BG);
     tft.setTextColor(C_TEXT);
@@ -210,13 +210,60 @@ void emulateUID() {
     tft.print(remaining);
     tft.print("s");
 
-    nfc.tgInitAsTarget(params, p, 500);
+    // Ініціалізуємось як ціль
+    int8_t result = nfc.tgInitAsTarget(params, p, 1000);
 
+    if (result > 0) {
+      // Рідер підключився — обробляємо команди
+      uint8_t cmd[32];
+      uint8_t cmdLen = 0;
+
+      // Читаємо команду від рідера
+      bool got = nfc.tgGetData(cmd, &cmdLen);
+
+      if (got && cmdLen > 0) {
+        // Показуємо що отримали команду
+        tft.fillRect(2, 60, 156, 10, C_BG);
+        tft.setTextColor(C_YELLOW);
+        tft.setCursor(2, 60);
+        tft.print("CMD: 0x");
+        tft.print(cmd[0], HEX);
+
+        // Обробка команд рідера
+        if (cmd[0] == 0x60 || cmd[0] == 0x61) {
+          // Auth Key A або Key B — відповідаємо ACK (0x00)
+          uint8_t ack[] = {0x00};
+          nfc.tgSetData(ack, 1);
+
+        } else if (cmd[0] == 0x30) {
+          // Read block — повертаємо 16 нульових байт + CRC
+          uint8_t block[16];
+          memset(block, 0x00, sizeof(block));
+          nfc.tgSetData(block, 16);
+
+        } else if (cmd[0] == 0xA0 || cmd[0] == 0xA2) {
+          // Write block — підтверджуємо ACK
+          uint8_t ack[] = {0x00};
+          nfc.tgSetData(ack, 1);
+
+        } else if (cmd[0] == 0x50) {
+          // HALT — рідер хоче завершити сесію
+          // просто виходимо з циклу команд
+          break;
+
+        } else {
+          // Невідома команда — відповідаємо NAK
+          uint8_t nak[] = {0x05};
+          nfc.tgSetData(nak, 1);
+        }
+      }
+    }
+
+    // Перевіряємо кнопку для виходу
     if (digitalRead(BTN_SCAN) == LOW || digitalRead(BTN_EMULATE) == LOW) {
       delay(50);
       break;
     }
-    delay(50);
   }
 
   nfc.inRelease(0);
@@ -228,6 +275,7 @@ void emulateUID() {
   delay(1500);
   drawMenu();
 }
+
 
 void setup() {
   Serial.begin(115200);
