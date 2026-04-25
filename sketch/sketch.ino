@@ -166,6 +166,7 @@ void scanUID() {
 
   drawMenu();
 }
+
 void emulateUID() {
   if (!hasUID) {
     tft.fillScreen(C_BG);
@@ -214,52 +215,49 @@ void emulateUID() {
     int8_t result = nfc.tgInitAsTarget(params, p, 1000);
 
     if (result > 0) {
-      // Рідер підключився — обробляємо команди
+      // Рідер підключився — читаємо команду
+      // tgGetData приймає (buf, maxLen) і повертає кількість байт
       uint8_t cmd[32];
-      uint8_t cmdLen = 0;
+      int16_t cmdLen = nfc.tgGetData(cmd, sizeof(cmd));
 
-      // Читаємо команду від рідера
-      bool got = nfc.tgGetData(cmd, &cmdLen);
-
-      if (got && cmdLen > 0) {
-        // Показуємо що отримали команду
+      if (cmdLen > 0) {
+        // Показуємо команду на дисплеї
         tft.fillRect(2, 60, 156, 10, C_BG);
         tft.setTextColor(C_YELLOW);
+        tft.setTextSize(1);
         tft.setCursor(2, 60);
         tft.print("CMD: 0x");
         tft.print(cmd[0], HEX);
 
-        // Обробка команд рідера
         if (cmd[0] == 0x60 || cmd[0] == 0x61) {
-          // Auth Key A або Key B — відповідаємо ACK (0x00)
+          // Auth Key A або Key B — ACK
           uint8_t ack[] = {0x00};
           nfc.tgSetData(ack, 1);
 
         } else if (cmd[0] == 0x30) {
-          // Read block — повертаємо 16 нульових байт + CRC
+          // Read block — повертаємо 16 нульових байт
           uint8_t block[16];
           memset(block, 0x00, sizeof(block));
           nfc.tgSetData(block, 16);
 
         } else if (cmd[0] == 0xA0 || cmd[0] == 0xA2) {
-          // Write block — підтверджуємо ACK
+          // Write block — ACK
           uint8_t ack[] = {0x00};
           nfc.tgSetData(ack, 1);
 
         } else if (cmd[0] == 0x50) {
-          // HALT — рідер хоче завершити сесію
-          // просто виходимо з циклу команд
+          // HALT — завершуємо сесію
           break;
 
         } else {
-          // Невідома команда — відповідаємо NAK
+          // Невідома команда — NAK
           uint8_t nak[] = {0x05};
           nfc.tgSetData(nak, 1);
         }
       }
     }
 
-    // Перевіряємо кнопку для виходу
+    // Кнопка для виходу
     if (digitalRead(BTN_SCAN) == LOW || digitalRead(BTN_EMULATE) == LOW) {
       delay(50);
       break;
@@ -275,7 +273,6 @@ void emulateUID() {
   delay(1500);
   drawMenu();
 }
-
 
 void setup() {
   Serial.begin(115200);
