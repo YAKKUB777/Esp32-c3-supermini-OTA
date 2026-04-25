@@ -2,14 +2,14 @@
 #include <SPI.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_ST7735.h>
-#include <Adafruit_PN532.h>
+#include <PN532.h>
 #include "config.h"
 
 // ====================== Ініціалізація ======================
 Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_RST);
 
-// Ініціалізація PN532 через I2C
-Adafruit_PN532 nfc(PN532_SDA, PN532_SCL);
+// Ініціалізація PN532 через I2C (Elechouse)
+PN532 nfc(PN532_SDA, PN532_SCL);
 
 // ====================== Глобальні змінні ======================
 uint8_t savedUID[7] = {0};
@@ -28,22 +28,18 @@ void emulateUID();
 void setup() {
   Serial.begin(115200);
   
-  // Кнопки
   pinMode(BTN_SCAN, INPUT_PULLUP);
   pinMode(BTN_EMULATE, INPUT_PULLUP);
   
-  // Дисплей
   pinMode(TFT_LED, OUTPUT);
   analogWrite(TFT_LED, 200);
   initDisplay();
   
-  // PN532
   initPN532();
   
   drawMenu();
 }
 
-// ====================== LOOP ======================
 void loop() {
   if (digitalRead(BTN_SCAN) == LOW) {
     delay(50);
@@ -71,7 +67,6 @@ void loop() {
   delay(100);
 }
 
-// ====================== Ініціалізація дисплея ======================
 void initDisplay() {
   SPI.begin(TFT_SCLK, -1, TFT_MOSI, TFT_CS);
   tft.initR(INITR_BLACKTAB);
@@ -80,7 +75,6 @@ void initDisplay() {
   tft.setTextSize(1);
 }
 
-// ====================== Ініціалізація PN532 ======================
 void initPN532() {
   nfc.begin();
   
@@ -98,7 +92,6 @@ void initPN532() {
   nfc.SAMConfig();
 }
 
-// ====================== Головне меню ======================
 void drawMenu() {
   tft.fillScreen(ST77XX_BLACK);
   tft.setTextColor(ST77XX_GREEN);
@@ -128,7 +121,6 @@ void drawMenu() {
   }
 }
 
-// ====================== Показати повідомлення ======================
 void showMessage(const char* msg, uint16_t color) {
   tft.fillRect(0, 20, 80, 140, ST77XX_BLACK);
   tft.setTextColor(color);
@@ -137,7 +129,6 @@ void showMessage(const char* msg, uint16_t color) {
   delay(1500);
 }
 
-// ====================== Сканування UID ======================
 void scanUID() {
   tft.fillRect(0, 20, 80, 140, ST77XX_BLACK);
   tft.setTextColor(ST77XX_YELLOW);
@@ -177,7 +168,6 @@ void scanUID() {
   delay(2000);
 }
 
-// ====================== Емуляція UID ======================
 void emulateUID() {
   tft.fillRect(0, 20, 80, 140, ST77XX_BLACK);
   tft.setTextColor(ST77XX_GREEN);
@@ -190,8 +180,8 @@ void emulateUID() {
     if (i < savedUIDlen - 1) tft.print(":");
   }
   
-  // Встановлюємо режим емуляції
-  if (!nfc.tgInitAsTarget(0, savedUID, savedUIDlen, 0, 0, 0, 0)) {
+  // Встановлюємо режим емуляції (Elechouse)
+  if (!nfc.tgInitAsTarget(savedUID, savedUIDlen)) {
     showMessage("Emulation failed!", ST77XX_RED);
     return;
   }
