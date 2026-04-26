@@ -2,7 +2,7 @@
  * NFC/RFID Емулятор на ESP32-C3 SuperMini
  * Дисплей: ST7735 0.96" 80x160
  * NFC: PN532 (I2C)
- * Кнопки: SCAN (GPIO0), EMULATE (GPIO1)
+ * Кнопка: SCAN (GPIO0)
  */
 
 #include <Wire.h>
@@ -109,16 +109,103 @@ void drawMenu() {
     tft.print("-- none --");
     tft.setTextColor(C_DIM);
     tft.setCursor(2, 52);
-    tft.print("Press SCAN to read");
+    tft.print("Press btn to scan");
   }
-  drawFooter("SCAN:read  EMU:emulate");
+  drawFooter("BTN: scan -> emulate");
+}
+
+void emulateUID() {
+  if (!hasUID) {
+    tft.fillScreen(C_BG);
+    drawHeader("[ EMULATE ]");
+    showMessage("No UID saved!", "Scan card first", C_RED);
+    drawFooter("Press button");
+    delay(2000);
+    drawMenu();
+    return;
+  }
+
+  tft.fillScreen(C_BG);
+  drawHeader("[ EMULATE ]");
+  tft.setTextColor(C_GREEN);
+  tft.setTextSize(1);
+  tft.setCursor(2, 17);
+  tft.print("Emulating...");
+  tft.setTextColor(C_DIM);
+  tft.setCursor(2, 28);
+  tft.print("UID:");
+  drawUID(savedUID, savedUIDLen, C_YELLOW);
+  drawFooter("Hold near reader...");
+
+  uint8_t params[32];
+  uint8_t p = 0;
+  params[p++] = 0x00;
+  params[p++] = 0x04;
+  params[p++] = 0x08;
+  memcpy(&params[p], savedUID, savedUIDLen);
+  p += savedUIDLen;
+
+  unsigned long startTime = millis();
+
+  while (millis() - startTime < EMULATE_TIME) {
+    uint32_t remaining = (EMULATE_TIME - (millis() - startTime)) / 1000;
+    tft.fillRect(2, 60, 80, 10, C_BG);
+    tft.setTextColor(C_TEXT);
+    tft.setTextSize(1);
+    tft.setCursor(2, 60);
+    tft.print("Time: ");
+    tft.print(remaining);
+    tft.print("s");
+
+    int8_t result = nfc.tgInitAsTarget(params, p, 1000);
+
+    if (result > 0) {
+      uint8_t cmd[32];
+      int16_t cmdLen = nfc.tgGetData(cmd, sizeof(cmd));
+
+      if (cmdLen > 0) {
+        tft.fillRect(2, 60, 156, 10, C_BG);
+        tft.setTextColor(C_YELLOW);
+        tft.setTextSize(1);
+        tft.setCursor(2, 60);
+        tft.print("CMD: 0x");
+        tft.print(cmd[0], HEX);
+
+        if (cmd[0] == 0x60 || cmd[0] == 0x61) {
+          uint8_t ack[] = {0x00};
+          nfc.tgSetData(ack, 1);
+        } else if (cmd[0] == 0x30) {
+          uint8_t block[16];
+          memset(block, 0x00, sizeof(block));
+          nfc.tgSetData(block, 16);
+        } else if (cmd[0] == 0xA0 || cmd[0] == 0xA2) {
+          uint8_t ack[] = {0x00};
+          nfc.tgSetData(ack, 1);
+        } else if (cmd[0] == 0x50) {
+          break;
+        } else {
+          uint8_t nak[] = {0x05};
+          nfc.tgSetData(nak, 1);
+        }
+      }
+    }
+  }
+
+  nfc.inRelease(0);
+
+  tft.fillScreen(C_BG);
+  drawHeader("[ EMULATE ]");
+  showMessage("Done!", "Emulation stopped", C_GREEN);
+  drawFooter("Press btn to scan again");
+  delay(1500);
+  drawMenu();
 }
 
 void scanUID() {
   tft.fillScreen(C_BG);
   drawHeader("[ SCAN ]");
   showMessage("Place card near", "reader...", C_HEAD);
-  drawFooter("Waiting...");
+  drawFooter("Waiting 10s...");
 
   uint8_t uid[MAX_UID_LEN];
   uint8_t uidLen = 0;
@@ -154,131 +241,24 @@ void scanUID() {
     tft.setTextColor(C_TEXT);
     tft.print(savedUIDLen);
     tft.print(" bytes");
-    drawFooter("Saved!");
-    delay(2500);
+    drawFooter("Starting emulation...");
+    delay(1000);
+
+    emulateUID();
   } else {
     tft.fillScreen(C_BG);
     drawHeader("[ SCAN ]");
     showMessage("No card found!", "Timeout 10s", C_RED);
-    drawFooter("Press any button");
-    delay(2000);
-  }
-
-  drawMenu();
-}
-
-void emulateUID() {
-  if (!hasUID) {
-    tft.fillScreen(C_BG);
-    drawHeader("[ EMULATE ]");
-    showMessage("No UID saved!", "Scan card first", C_RED);
-    drawFooter("Press any button");
+    drawFooter("Press btn to retry");
     delay(2000);
     drawMenu();
-    return;
   }
-
-  tft.fillScreen(C_BG);
-  drawHeader("[ EMULATE ]");
-  tft.setTextColor(C_GREEN);
-  tft.setTextSize(1);
-  tft.setCursor(2, 17);
-  tft.print("Emulating...");
-  tft.setTextColor(C_DIM);
-  tft.setCursor(2, 28);
-  tft.print("UID:");
-  drawUID(savedUID, savedUIDLen, C_YELLOW);
-  drawFooter("Hold near reader...");
-
-  uint8_t params[32];
-  uint8_t p = 0;
-  params[p++] = 0x00; // ATQA byte 1
-  params[p++] = 0x04; // ATQA byte 2
-  params[p++] = 0x08; // SAK — Mifare Classic 1K
-  memcpy(&params[p], savedUID, savedUIDLen);
-  p += savedUIDLen;
-
-  unsigned long startTime = millis();
-
-  while (millis() - startTime < EMULATE_TIME) {
-    // Оновлюємо таймер
-    uint32_t remaining = (EMULATE_TIME - (millis() - startTime)) / 1000;
-    tft.fillRect(2, 60, 80, 10, C_BG);
-    tft.setTextColor(C_TEXT);
-    tft.setTextSize(1);
-    tft.setCursor(2, 60);
-    tft.print("Time: ");
-    tft.print(remaining);
-    tft.print("s");
-
-    // Ініціалізуємось як ціль
-    int8_t result = nfc.tgInitAsTarget(params, p, 1000);
-
-    if (result > 0) {
-      // Рідер підключився — читаємо команду
-      // tgGetData приймає (buf, maxLen) і повертає кількість байт
-      uint8_t cmd[32];
-      int16_t cmdLen = nfc.tgGetData(cmd, sizeof(cmd));
-
-      if (cmdLen > 0) {
-        // Показуємо команду на дисплеї
-        tft.fillRect(2, 60, 156, 10, C_BG);
-        tft.setTextColor(C_YELLOW);
-        tft.setTextSize(1);
-        tft.setCursor(2, 60);
-        tft.print("CMD: 0x");
-        tft.print(cmd[0], HEX);
-
-        if (cmd[0] == 0x60 || cmd[0] == 0x61) {
-          // Auth Key A або Key B — ACK
-          uint8_t ack[] = {0x00};
-          nfc.tgSetData(ack, 1);
-
-        } else if (cmd[0] == 0x30) {
-          // Read block — повертаємо 16 нульових байт
-          uint8_t block[16];
-          memset(block, 0x00, sizeof(block));
-          nfc.tgSetData(block, 16);
-
-        } else if (cmd[0] == 0xA0 || cmd[0] == 0xA2) {
-          // Write block — ACK
-          uint8_t ack[] = {0x00};
-          nfc.tgSetData(ack, 1);
-
-        } else if (cmd[0] == 0x50) {
-          // HALT — завершуємо сесію
-          break;
-
-        } else {
-          // Невідома команда — NAK
-          uint8_t nak[] = {0x05};
-          nfc.tgSetData(nak, 1);
-        }
-      }
-    }
-
-    // Кнопка для виходу
-    if (digitalRead(BTN_SCAN) == LOW || digitalRead(BTN_EMULATE) == LOW) {
-      delay(50);
-      break;
-    }
-  }
-
-  nfc.inRelease(0);
-
-  tft.fillScreen(C_BG);
-  drawHeader("[ EMULATE ]");
-  showMessage("Done!", "Emulation stopped", C_GREEN);
-  drawFooter("Press any button");
-  delay(1500);
-  drawMenu();
 }
 
 void setup() {
   Serial.begin(115200);
 
-  pinMode(BTN_SCAN,    INPUT_PULLUP);
-  pinMode(BTN_EMULATE, INPUT_PULLUP);
+  pinMode(BTN_SCAN, INPUT_PULLUP);
 
   SPI.begin(TFT_SCK, -1, TFT_MOSI);
   tft.initR(INITR_BLACKTAB);
@@ -334,14 +314,6 @@ void loop() {
     if (digitalRead(BTN_SCAN) == LOW) {
       while (digitalRead(BTN_SCAN) == LOW) delay(10);
       scanUID();
-    }
-  }
-
-  if (digitalRead(BTN_EMULATE) == LOW) {
-    delay(50);
-    if (digitalRead(BTN_EMULATE) == LOW) {
-      while (digitalRead(BTN_EMULATE) == LOW) delay(10);
-      emulateUID();
     }
   }
 
