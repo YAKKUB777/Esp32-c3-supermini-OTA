@@ -1,54 +1,46 @@
-name: Build ESP32-C3 NFC Emulator
+name: Build NRF24 Scanner
 
 on:
   push:
     branches: [ main ]
-  workflow_dispatch:
+  pull_request:
+    branches: [ main ]
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup arduino-cli
-        uses: arduino/setup-arduino-cli@v2
-
-      - name: Configure arduino-cli
-        run: |
-          arduino-cli config init
-          arduino-cli config set board_manager.additional_urls "https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json"
-          arduino-cli core update-index
-
-      - name: Install ESP32 platform
-        run: arduino-cli core install esp32:esp32
-
-      - name: Install libraries from Library Manager
-        run: |
-          arduino-cli lib install "Adafruit GFX Library"
-          arduino-cli lib install "Adafruit ST7735 and ST7789 Library"
-          arduino-cli lib install "Adafruit BusIO"
-
-      - name: Install PN532 library from GitHub
-        run: |
-          mkdir -p ~/Arduino/libraries/PN532
-          git clone https://github.com/elechouse/PN532.git /tmp/pn532_repo
-          cp -r /tmp/pn532_repo/PN532/. ~/Arduino/libraries/PN532/
-          cp -r /tmp/pn532_repo/PN532_I2C ~/Arduino/libraries/PN532_I2C
-
-      - name: Compile sketch
-        run: |
-          arduino-cli compile \
-            --fqbn esp32:esp32:esp32c3 \
-            --libraries ~/Arduino/libraries \
-            --output-dir ./output \
-            sketch/
-
-      - name: Upload firmware artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: firmware-nfc-emulator
-          path: ./output/
-          retention-days: 30
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        
+    - name: Install Arduino CLI
+      run: |
+        mkdir -p ~/Arduino/libraries
+        pip install arduino-cli
+        arduino-cli config init
+        arduino-cli core update-index
+        arduino-cli core install esp32:esp32
+        
+    - name: Install libraries
+      run: |
+        arduino-cli lib install "Adafruit GFX Library"
+        arduino-cli lib install "Adafruit ST7735 and ST7789 Library"
+        arduino-cli lib install "RF24"
+        
+    - name: Compile sketch
+      run: |
+        arduino-cli compile \
+          --fqbn esp32:esp32:esp32c3 \
+          --output-dir ./output \
+          sketch/
+          
+    - name: Upload firmware artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: firmware
+        path: output/*.bin
