@@ -13,22 +13,17 @@
 Adafruit_ST7735 tft(TFT_CS, TFT_DC, TFT_RST);
 RF24 radio(NRF_CE, NRF_CSN);
 
-// ===== Дані сканування =====
+// ===== Дані =====
 int channels[126];
 int peaks[126];
-int maxVal = -90;
-int curPeak = -90;
-int peakCh = 0;
+int curCh = 0;
+int curRSSI = -90;
 bool nrfOK = false;
-int scanPos = 0;
-unsigned long lastScan = 0;
 unsigned long lastDraw = 0;
 
 // ===== Прототипи =====
-void testDisplay();
-void testNRF();
+void initNRF();
 void showInitScreen();
-void scanLoop();
 void drawSpectrum();
 
 // =============================================
@@ -41,18 +36,24 @@ void setup() {
   tft.initR(INITR_MINI160x80);
   tft.setRotation(1);
   tft.fillScreen(C_BG);
+  tft.setTextColor(C_OK);
+  tft.setCursor(10, 10);
+  tft.print("Display: OK");
   
-  // Тест дисплея
-  testDisplay();
+  // Ініціалізація NRF24
+  initNRF();
   
-  // Тест NRF24
-  testNRF();
+  // Масиви
+  for (int i = 0; i < 126; i++) {
+    channels[i] = -90;
+    peaks[i] = -90;
+  }
   
-  // Показати результат
+  // Показати статус
   showInitScreen();
   
   if (!nrfOK) {
-    while(1) delay(1000); // Зависаємо, якщо NRF не працює
+    while(1) delay(1000);
   }
   
   delay(2000);
@@ -61,63 +62,46 @@ void setup() {
 
 // =============================================
 void loop() {
-  if (!nrfOK) return;
+  // Сканування одного каналу
+  SPI.end();
+  delay(10);
+  SPI.begin(TFT_SCLK, NRF_MISO, TFT_MOSI, NRF_CSN);
   
-  // Сканування
-  if (micros() - lastScan >= SCAN_DELAY_US) {
-    lastScan = micros();
-    
-    // Перемикаємо SPI на NRF24
-    SPI.end();
-    SPI.begin(TFT_SCLK, NRF_MISO, TFT_MOSI, NRF_CSN);
-    
-    radio.powerUp();
-    radio.setChannel(scanPos);
-    radio.startListening();
-    delayMicroseconds(128);
-    radio.stopListening();
-    
-    int rssi = radio.testRPD() ? -50 : random(-95, -70);
-    radio.powerDown();
-    
-    // Повертаємо SPI на дисплей
-    SPI.end();
-    SPI.begin(TFT_SCLK, -1, TFT_MOSI, TFT_CS);
-    
-    channels[scanPos] = rssi;
-    if (rssi > peaks[scanPos]) peaks[scanPos] = rssi;
-    if (rssi > curPeak) { curPeak = rssi; peakCh = scanPos; }
-    if (rssi > maxVal) maxVal = rssi;
-    
-    scanPos++;
-    if (scanPos > 125) {
-      scanPos = 0;
-      curPeak = -90;
-      // Затухання піків
-      for (int i = 0; i < 126; i++) {
-        if (peaks[i] > -90) peaks[i] -= 2;
-      }
+  radio.powerUp();
+  radio.setChannel(curCh);
+  radio.startListening();
+  delayMicroseconds(128);
+  radio.stopListening();
+  
+  curRSSI = radio.testRPD() ? random(-55, -45) : random(-90, -70);
+  radio.powerDown();
+  
+  SPI.end();
+  delay(10);
+  SPI.begin(TFT_SCLK, -1, TFT_MOSI, TFT_CS);
+  
+  channels[curCh] = curRSSI;
+  if (curRSSI > peaks[curCh]) peaks[curCh] = curRSSI;
+  
+  curCh++;
+  if (curCh > 125) {
+    curCh = 0;
+    for (int i = 0; i < 126; i++) {
+      if (peaks[i] > -90) peaks[i] -= 2;
     }
   }
   
   // Малювання
-  if (millis() - lastDraw >= 50) {
+  if (millis() - lastDraw >= 33) {
     lastDraw = millis();
     drawSpectrum();
   }
 }
 
 // =============================================
-void testDisplay() {
-  tft.setTextColor(C_OK);
-  tft.setCursor(10, 10);
-  tft.print("Display: OK");
-  Serial.println("Display: OK");
-}
-
-// =============================================
-void testNRF() {
+void initNRF() {
   SPI.end();
+  delay(50);
   SPI.begin(TFT_SCLK, NRF_MISO, TFT_MOSI, NRF_CSN);
   
   nrfOK = radio.begin();
@@ -125,13 +109,15 @@ void testNRF() {
     radio.setAutoAck(false);
     radio.setDataRate(RF24_2MBPS);
     radio.setCRCLength(RF24_CRC_DISABLED);
-    radio.setPALevel(RF24_PA_MAX);
+    radio.setPALevel(RF24_PA_MIN);
     radio.setChannel(0);
     radio.stopListening();
     nrfOK = radio.isChipConnected();
+    radio.powerDown();
   }
   
   SPI.end();
+  delay(50);
   SPI.begin(TFT_SCLK, -1, TFT_MOSI, TFT_CS);
   
   Serial.print("NRF24: ");
@@ -142,13 +128,11 @@ void testNRF() {
 void showInitScreen() {
   tft.fillScreen(C_BG);
   
-  // Заголовок
   tft.fillRect(0, 0, 160, 14, C_HEAD);
   tft.setTextColor(C_BG);
   tft.setCursor(5, 3);
   tft.print("NRF24 SCANNER");
   
-  // Статус
   tft.setTextColor(C_OK);
   tft.setCursor(10, 25);
   tft.print("Display: OK");
@@ -157,26 +141,21 @@ void showInitScreen() {
   if (nrfOK) {
     tft.setTextColor(C_OK);
     tft.print("NRF24: OK");
-    tft.setCursor(10, 58);
     tft.setTextColor(C_TEXT);
-    tft.print("PA: MAX");
-    tft.setCursor(10, 70);
-    tft.print("Ch: 0-125");
+    tft.setCursor(10, 58);
+    tft.print("Starting scan...");
   } else {
     tft.setTextColor(C_ERR);
-    tft.print("NRF24: FAIL!");
+    tft.print("NRF24: FAILED!");
     tft.setTextColor(C_WARN);
     tft.setCursor(10, 58);
-    tft.print("Check pins:");
-    tft.setCursor(10, 70);
     tft.print("CE=2 CSN=3 MISO=21");
   }
   
-  // Футер
   tft.fillRect(0, 144, 160, 16, 0x1082);
   tft.setTextColor(0x8410);
   tft.setCursor(2, 148);
-  tft.print(nrfOK ? "Starting scan..." : "Reset to retry");
+  tft.print(nrfOK ? "Ready..." : "Fix & reset");
 }
 
 // =============================================
@@ -185,21 +164,19 @@ void drawSpectrum() {
   tft.fillRect(0, 0, 160, 12, C_HEAD);
   tft.setTextColor(C_BG);
   tft.setCursor(3, 2);
-  tft.print("2.4GHz");
-  tft.setCursor(70, 2);
-  tft.print("PK:");
-  tft.print(peakCh);
-  tft.setCursor(120, 2);
-  tft.print(maxVal);
-  tft.print("dB");
+  tft.print("CH:");
+  tft.print(curCh);
+  tft.setCursor(60, 2);
+  tft.print("RSSI:");
+  tft.print(curRSSI);
   
   // Графік
   int gy = 14;
-  int gh = 60;
+  int gh = 58;
   tft.fillRect(0, gy, 160, gh, C_BG);
   
   // Сітка
-  for (int y = gy; y < gy + gh; y += 15) {
+  for (int y = gy; y < gy + gh; y += 14) {
     tft.drawFastHLine(0, y, 160, C_GRID);
   }
   
@@ -212,9 +189,11 @@ void drawSpectrum() {
     uint16_t color = C_GRAPH;
     if (channels[i] > -50) color = C_WARN;
     if (channels[i] > -40) color = C_ERR;
-    if (i == scanPos) color = C_TEXT;
+    if (i == curCh) color = C_TEXT;
     
-    tft.drawFastVLine(x, y, h, color);
+    if (h > 0) {
+      tft.drawFastVLine(x, y, h, color);
+    }
     
     // Пік
     if (peaks[i] > -90) {
@@ -228,10 +207,7 @@ void drawSpectrum() {
   tft.fillRect(0, 144, 160, 16, 0x1082);
   tft.setTextColor(0x8410);
   tft.setCursor(2, 148);
-  tft.print("CH:");
-  tft.print(scanPos);
-  tft.setCursor(80, 148);
-  tft.print("MAX:");
-  tft.print(curPeak);
-  tft.print("dB");
+  tft.print("0");
+  tft.setCursor(145, 148);
+  tft.print("125");
 }
