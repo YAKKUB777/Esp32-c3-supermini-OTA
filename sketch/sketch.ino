@@ -1,321 +1,237 @@
 /*
- * NFC/RFID Емулятор на ESP32-C3 SuperMini
- * Дисплей: ST7735 0.96" 80x160
- * NFC: PN532 (I2C)
- * Кнопка: SCAN (GPIO0)
+ * NRF24 Spectrum Scanner
+ * ESP32-C3 Supermini + ST7735 0.96" + NRF24L01
  */
 
-#include <Wire.h>
 #include <SPI.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_ST7735.h>
-#include <PN532_I2C.h>
-#include <PN532.h>
+#include <RF24.h>
 #include "config.h"
 
-#define C_BG     ST77XX_BLACK
-#define C_HEAD   ST77XX_CYAN
-#define C_TEXT   ST77XX_WHITE
-#define C_GREEN  ST77XX_GREEN
-#define C_RED    ST77XX_RED
-#define C_YELLOW ST77XX_YELLOW
-#define C_DIM    0x4208
+// ===== Об'єкти =====
+Adafruit_ST7735 tft(TFT_CS, TFT_DC, TFT_RST);
+RF24 radio(NRF_CE, NRF_CSN);
 
-Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_RST);
-PN532_I2C pn532i2c(Wire);
-PN532 nfc(pn532i2c);
+// ===== Дані сканування =====
+int channels[126];
+int peaks[126];
+int maxVal = -90;
+int curPeak = -90;
+int peakCh = 0;
+bool nrfOK = false;
+int scanPos = 0;
+unsigned long lastScan = 0;
+unsigned long lastDraw = 0;
 
-uint8_t savedUID[MAX_UID_LEN];
-uint8_t savedUIDLen = 0;
-bool    hasUID      = false;
+// ===== Прототипи =====
+void testDisplay();
+void testNRF();
+void showInitScreen();
+void scanLoop();
+void drawSpectrum();
 
-void drawHeader(const char* title);
-void drawFooter(const char* hints);
-void drawMenu();
-void drawUID(uint8_t* uid, uint8_t len, uint16_t color);
-void showMessage(const char* line1, const char* line2, uint16_t color);
-void scanUID();
-void emulateUID();
-
-void drawHeader(const char* title) {
-  tft.fillRect(0, 0, 160, 14, C_HEAD);
-  tft.setTextColor(C_BG);
-  tft.setTextSize(1);
-  int x = (160 - strlen(title) * 6) / 2;
-  tft.setCursor(x < 0 ? 0 : x, 3);
-  tft.print(title);
-}
-
-void drawFooter(const char* hints) {
-  tft.fillRect(0, 69, 160, 11, 0x1082);
-  tft.setTextColor(C_DIM);
-  tft.setTextSize(1);
-  tft.setCursor(2, 71);
-  tft.print(hints);
-}
-
-void drawUID(uint8_t* uid, uint8_t len, uint16_t color) {
-  String hex = "";
-  for (uint8_t i = 0; i < len; i++) {
-    if (uid[i] < 0x10) hex += "0";
-    hex += String(uid[i], HEX);
-    if (i < len - 1) hex += ":";
-  }
-  hex.toUpperCase();
-  tft.setTextColor(color);
-  tft.setTextSize(1);
-  if (hex.length() > 17) {
-    tft.setCursor(2, 38);
-    tft.print(hex.substring(0, 17));
-    tft.setCursor(2, 49);
-    tft.print(hex.substring(17));
-  } else {
-    tft.setCursor(2, 44);
-    tft.print(hex);
-  }
-}
-
-void showMessage(const char* line1, const char* line2, uint16_t color) {
-  tft.fillRect(0, 14, 160, 56, C_BG);
-  tft.setTextColor(color);
-  tft.setTextSize(1);
-  tft.setCursor(2, 25);
-  tft.print(line1);
-  if (line2 && strlen(line2) > 0) {
-    tft.setTextColor(C_TEXT);
-    tft.setCursor(2, 40);
-    tft.print(line2);
-  }
-}
-
-void drawMenu() {
+// =============================================
+void setup() {
+  Serial.begin(115200);
+  delay(500);
+  
+  // Ініціалізація дисплея
+  SPI.begin(TFT_SCLK, -1, TFT_MOSI, TFT_CS);
+  tft.initR(INITR_MINI160x80);
+  tft.setRotation(1);
   tft.fillScreen(C_BG);
-  drawHeader("[ NFC EMULATOR ]");
-  tft.setTextColor(C_DIM);
-  tft.setTextSize(1);
-  tft.setCursor(2, 17);
-  tft.print("Saved UID:");
-  if (hasUID) {
-    drawUID(savedUID, savedUIDLen, C_YELLOW);
-    tft.setTextColor(C_DIM);
-    tft.setCursor(2, 59);
-    tft.print("Len: ");
-    tft.setTextColor(C_TEXT);
-    tft.print(savedUIDLen);
-    tft.print(" bytes");
-  } else {
-    tft.setTextColor(C_RED);
-    tft.setCursor(2, 38);
-    tft.print("-- none --");
-    tft.setTextColor(C_DIM);
-    tft.setCursor(2, 52);
-    tft.print("Press btn to scan");
+  
+  // Тест дисплея
+  testDisplay();
+  
+  // Тест NRF24
+  testNRF();
+  
+  // Показати результат
+  showInitScreen();
+  
+  if (!nrfOK) {
+    while(1) delay(1000); // Зависаємо, якщо NRF не працює
   }
-  drawFooter("BTN: scan -> emulate");
+  
+  delay(2000);
+  tft.fillScreen(C_BG);
 }
 
-void emulateUID() {
-  if (!hasUID) {
-    tft.fillScreen(C_BG);
-    drawHeader("[ EMULATE ]");
-    showMessage("No UID saved!", "Scan card first", C_RED);
-    drawFooter("Press button");
-    delay(2000);
-    drawMenu();
-    return;
-  }
-
-  tft.fillScreen(C_BG);
-  drawHeader("[ EMULATE ]");
-  tft.setTextColor(C_GREEN);
-  tft.setTextSize(1);
-  tft.setCursor(2, 17);
-  tft.print("Emulating...");
-  tft.setTextColor(C_DIM);
-  tft.setCursor(2, 28);
-  tft.print("UID:");
-  drawUID(savedUID, savedUIDLen, C_YELLOW);
-  drawFooter("Hold near reader...");
-
-  uint8_t params[32];
-  uint8_t p = 0;
-  params[p++] = 0x00;
-  params[p++] = 0x04;
-  params[p++] = 0x08;
-  memcpy(&params[p], savedUID, savedUIDLen);
-  p += savedUIDLen;
-
-  unsigned long startTime = millis();
-
-  while (millis() - startTime < EMULATE_TIME) {
-    uint32_t remaining = (EMULATE_TIME - (millis() - startTime)) / 1000;
-    tft.fillRect(2, 60, 80, 10, C_BG);
-    tft.setTextColor(C_TEXT);
-    tft.setTextSize(1);
-    tft.setCursor(2, 60);
-    tft.print("Time: ");
-    tft.print(remaining);
-    tft.print("s");
-
-    int8_t result = nfc.tgInitAsTarget(params, p, 1000);
-
-    if (result > 0) {
-      uint8_t cmd[32];
-      int16_t cmdLen = nfc.tgGetData(cmd, sizeof(cmd));
-
-      if (cmdLen > 0) {
-        tft.fillRect(2, 60, 156, 10, C_BG);
-        tft.setTextColor(C_YELLOW);
-        tft.setTextSize(1);
-        tft.setCursor(2, 60);
-        tft.print("CMD: 0x");
-        tft.print(cmd[0], HEX);
-
-        if (cmd[0] == 0x60 || cmd[0] == 0x61) {
-          uint8_t ack[] = {0x00};
-          nfc.tgSetData(ack, 1);
-        } else if (cmd[0] == 0x30) {
-          uint8_t block[16];
-          memset(block, 0x00, sizeof(block));
-          nfc.tgSetData(block, 16);
-        } else if (cmd[0] == 0xA0 || cmd[0] == 0xA2) {
-          uint8_t ack[] = {0x00};
-          nfc.tgSetData(ack, 1);
-        } else if (cmd[0] == 0x50) {
-          break;
-        } else {
-          uint8_t nak[] = {0x05};
-          nfc.tgSetData(nak, 1);
-        }
+// =============================================
+void loop() {
+  if (!nrfOK) return;
+  
+  // Сканування
+  if (micros() - lastScan >= SCAN_DELAY_US) {
+    lastScan = micros();
+    
+    // Перемикаємо SPI на NRF24
+    SPI.end();
+    SPI.begin(TFT_SCLK, NRF_MISO, TFT_MOSI, NRF_CSN);
+    
+    radio.powerUp();
+    radio.setChannel(scanPos);
+    radio.startListening();
+    delayMicroseconds(128);
+    radio.stopListening();
+    
+    int rssi = radio.testRPD() ? -50 : random(-95, -70);
+    radio.powerDown();
+    
+    // Повертаємо SPI на дисплей
+    SPI.end();
+    SPI.begin(TFT_SCLK, -1, TFT_MOSI, TFT_CS);
+    
+    channels[scanPos] = rssi;
+    if (rssi > peaks[scanPos]) peaks[scanPos] = rssi;
+    if (rssi > curPeak) { curPeak = rssi; peakCh = scanPos; }
+    if (rssi > maxVal) maxVal = rssi;
+    
+    scanPos++;
+    if (scanPos > 125) {
+      scanPos = 0;
+      curPeak = -90;
+      // Затухання піків
+      for (int i = 0; i < 126; i++) {
+        if (peaks[i] > -90) peaks[i] -= 2;
       }
     }
   }
-
-  nfc.inRelease(0);
-
-  tft.fillScreen(C_BG);
-  drawHeader("[ EMULATE ]");
-  showMessage("Done!", "Emulation stopped", C_GREEN);
-  drawFooter("Press btn to scan again");
-  delay(1500);
-  drawMenu();
+  
+  // Малювання
+  if (millis() - lastDraw >= 50) {
+    lastDraw = millis();
+    drawSpectrum();
+  }
 }
 
-void scanUID() {
-  tft.fillScreen(C_BG);
-  drawHeader("[ SCAN ]");
-  showMessage("Place card near", "reader...", C_HEAD);
-  drawFooter("Waiting 10s...");
+// =============================================
+void testDisplay() {
+  tft.setTextColor(C_OK);
+  tft.setCursor(10, 10);
+  tft.print("Display: OK");
+  Serial.println("Display: OK");
+}
 
-  uint8_t uid[MAX_UID_LEN];
-  uint8_t uidLen = 0;
-  bool found = false;
-  unsigned long start = millis();
-
-  while (millis() - start < 10000) {
-    if (nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLen)) {
-      found = true;
-      break;
-    }
-    delay(100);
+// =============================================
+void testNRF() {
+  SPI.end();
+  SPI.begin(TFT_SCLK, NRF_MISO, TFT_MOSI, NRF_CSN);
+  
+  nrfOK = radio.begin();
+  if (nrfOK) {
+    radio.setAutoAck(false);
+    radio.setDataRate(RF24_2MBPS);
+    radio.setCRCLength(RF24_CRC_DISABLED);
+    radio.setPALevel(RF24_PA_MAX);
+    radio.setChannel(0);
+    radio.stopListening();
+    nrfOK = radio.isChipConnected();
   }
+  
+  SPI.end();
+  SPI.begin(TFT_SCLK, -1, TFT_MOSI, TFT_CS);
+  
+  Serial.print("NRF24: ");
+  Serial.println(nrfOK ? "OK" : "FAILED");
+}
 
-  if (found && uidLen > 0) {
-    memcpy(savedUID, uid, uidLen);
-    savedUIDLen = uidLen;
-    hasUID = true;
-
-    tft.fillScreen(C_BG);
-    drawHeader("[ SCAN ]");
-    tft.setTextColor(C_GREEN);
-    tft.setTextSize(1);
-    tft.setCursor(2, 17);
-    tft.print("Card found!");
-    tft.setTextColor(C_DIM);
-    tft.setCursor(2, 28);
-    tft.print("UID:");
-    drawUID(savedUID, savedUIDLen, C_YELLOW);
-    tft.setTextColor(C_DIM);
-    tft.setCursor(2, 60);
-    tft.print("Len: ");
+// =============================================
+void showInitScreen() {
+  tft.fillScreen(C_BG);
+  
+  // Заголовок
+  tft.fillRect(0, 0, 160, 14, C_HEAD);
+  tft.setTextColor(C_BG);
+  tft.setCursor(5, 3);
+  tft.print("NRF24 SCANNER");
+  
+  // Статус
+  tft.setTextColor(C_OK);
+  tft.setCursor(10, 25);
+  tft.print("Display: OK");
+  
+  tft.setCursor(10, 40);
+  if (nrfOK) {
+    tft.setTextColor(C_OK);
+    tft.print("NRF24: OK");
+    tft.setCursor(10, 58);
     tft.setTextColor(C_TEXT);
-    tft.print(savedUIDLen);
-    tft.print(" bytes");
-    drawFooter("Starting emulation...");
-    delay(1000);
-
-    emulateUID();
+    tft.print("PA: MAX");
+    tft.setCursor(10, 70);
+    tft.print("Ch: 0-125");
   } else {
-    tft.fillScreen(C_BG);
-    drawHeader("[ SCAN ]");
-    showMessage("No card found!", "Timeout 10s", C_RED);
-    drawFooter("Press btn to retry");
-    delay(2000);
-    drawMenu();
+    tft.setTextColor(C_ERR);
+    tft.print("NRF24: FAIL!");
+    tft.setTextColor(C_WARN);
+    tft.setCursor(10, 58);
+    tft.print("Check pins:");
+    tft.setCursor(10, 70);
+    tft.print("CE=2 CSN=3 MISO=21");
   }
+  
+  // Футер
+  tft.fillRect(0, 144, 160, 16, 0x1082);
+  tft.setTextColor(0x8410);
+  tft.setCursor(2, 148);
+  tft.print(nrfOK ? "Starting scan..." : "Reset to retry");
 }
 
-void setup() {
-  Serial.begin(115200);
-
-  pinMode(BTN_SCAN, INPUT_PULLUP);
-
-  SPI.begin(TFT_SCK, -1, TFT_MOSI);
-  tft.initR(INITR_BLACKTAB);
-  tft.setRotation(1);
-  tft.fillScreen(C_BG);
-
-  tft.setTextColor(C_HEAD);
-  tft.setTextSize(2);
-  tft.setCursor(10, 15);
-  tft.print("NFC EMU");
-  tft.setTextColor(C_DIM);
-  tft.setTextSize(1);
-  tft.setCursor(15, 40);
-  tft.print("ESP32-C3");
-  tft.setCursor(15, 52);
-  tft.print("Initializing...");
-
-  Wire.begin(PN532_SDA, PN532_SCL);
-  nfc.begin();
-
-  uint32_t versiondata = nfc.getFirmwareVersion();
-  if (!versiondata) {
-    tft.fillScreen(C_BG);
-    tft.setTextColor(C_RED);
-    tft.setTextSize(1);
-    tft.setCursor(2, 20);
-    tft.print("PN532 not found!");
-    tft.setTextColor(C_DIM);
-    tft.setCursor(2, 35);
-    tft.print("SDA=GPIO20");
-    tft.setCursor(2, 47);
-    tft.print("SCL=GPIO21");
-    while (1) delay(1000);
+// =============================================
+void drawSpectrum() {
+  // Заголовок
+  tft.fillRect(0, 0, 160, 12, C_HEAD);
+  tft.setTextColor(C_BG);
+  tft.setCursor(3, 2);
+  tft.print("2.4GHz");
+  tft.setCursor(70, 2);
+  tft.print("PK:");
+  tft.print(peakCh);
+  tft.setCursor(120, 2);
+  tft.print(maxVal);
+  tft.print("dB");
+  
+  // Графік
+  int gy = 14;
+  int gh = 60;
+  tft.fillRect(0, gy, 160, gh, C_BG);
+  
+  // Сітка
+  for (int y = gy; y < gy + gh; y += 15) {
+    tft.drawFastHLine(0, y, 160, C_GRID);
   }
-
-  tft.fillRect(0, 40, 160, 20, C_BG);
-  tft.setTextColor(C_GREEN);
-  tft.setTextSize(1);
-  tft.setCursor(15, 42);
-  tft.print("PN532 OK! v");
-  tft.print((versiondata >> 16) & 0xFF);
-  tft.print(".");
-  tft.print((versiondata >> 8) & 0xFF);
-
-  nfc.SAMConfig();
-  delay(1200);
-  drawMenu();
-}
-
-void loop() {
-  if (digitalRead(BTN_SCAN) == LOW) {
-    delay(50);
-    if (digitalRead(BTN_SCAN) == LOW) {
-      while (digitalRead(BTN_SCAN) == LOW) delay(10);
-      scanUID();
+  
+  // Стовпчики
+  for (int i = 0; i < 126; i++) {
+    int x = map(i, 0, 125, 2, 157);
+    int h = map(channels[i], -90, -30, 0, gh);
+    int y = gy + gh - h;
+    
+    uint16_t color = C_GRAPH;
+    if (channels[i] > -50) color = C_WARN;
+    if (channels[i] > -40) color = C_ERR;
+    if (i == scanPos) color = C_TEXT;
+    
+    tft.drawFastVLine(x, y, h, color);
+    
+    // Пік
+    if (peaks[i] > -90) {
+      int ph = map(peaks[i], -90, -30, 0, gh);
+      int py = gy + gh - ph;
+      tft.drawPixel(x, py, C_PEAK);
     }
   }
-
-  delay(10);
+  
+  // Легенда
+  tft.fillRect(0, 144, 160, 16, 0x1082);
+  tft.setTextColor(0x8410);
+  tft.setCursor(2, 148);
+  tft.print("CH:");
+  tft.print(scanPos);
+  tft.setCursor(80, 148);
+  tft.print("MAX:");
+  tft.print(curPeak);
+  tft.print("dB");
 }
