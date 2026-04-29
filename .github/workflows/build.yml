@@ -34,14 +34,8 @@ jobs:
           --output-dir ./output \
           sketch/
           
-    - name: List output files
-      run: ls -la output/
-          
-    - name: Create Release
-      uses: softprops/action-gh-release@v2
+    - name: Upload firmware artifact
+      uses: actions/upload-artifact@v4
       with:
-        tag_name: v1.0.${{ github.run_number }}
-        name: Build ${{ github.run_number }}
-        files: output/*.bin
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        name: firmware
+        path: output/
