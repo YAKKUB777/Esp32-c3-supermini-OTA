@@ -35,12 +35,13 @@ jobs:
           sketch/
           
     - name: List output files
-      run: |
-        echo "=== Output files ==="
-        ls -la output/
-        
-    - name: Upload firmware artifact
-      uses: actions/upload-artifact@v4
+      run: ls -la output/
+          
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
       with:
-        name: firmware
-        path: output/
+        tag_name: v1.0.${{ github.run_number }}
+        name: Build ${{ github.run_number }}
+        files: output/*.bin
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
