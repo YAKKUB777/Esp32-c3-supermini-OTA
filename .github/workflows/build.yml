@@ -1,9 +1,7 @@
-name: Build NRF24 Jammer
+name: Build OTA Programmer
 
 on:
   push:
-    branches: [ main ]
-  pull_request:
     branches: [ main ]
 
 jobs:
@@ -19,10 +17,6 @@ jobs:
         arduino-cli config init
         arduino-cli core update-index
         arduino-cli core install esp32:esp32
-        
-    - name: Install libraries
-      run: |
-        arduino-cli lib install "RF24"
         
     - name: Compile sketch
       run: |
